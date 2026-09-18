@@ -1,0 +1,21 @@
+# GestureOS runtime dependencies.
+# Pinned after validating installation (Section 8). Vision-engine packages
+# (opencv-python, mediapipe) aren't imported by any Phase 1 code yet, but
+# are pinned here from the start so `pip install -r requirements.txt` only
+# needs to run once as later phases land.
+
+numpy==1.26.4
+opencv-python==4.10.0.84
+mediapipe==0.10.21
+
+pygame==2.6.1
+Pillow==11.0.0
+pynput==1.7.7
+
+# macOS-only automation frameworks (Section 4). Marked with an environment
+# marker so this file still installs cleanly on a non-macOS dev/CI machine
+# used only for running the unit test suite.
+pyobjc-core==10.3.2 ; sys_platform == "darwin"
+pyobjc-framework-Cocoa==10.3.2 ; sys_platform == "darwin"
+pyobjc-framework-Quartz==10.3.2 ; sys_platform == "darwin"
+pyobjc-framework-ApplicationServices==10.3.2 ; sys_platform == "darwin"

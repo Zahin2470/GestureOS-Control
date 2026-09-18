@@ -1,0 +1,9 @@
+# Development-only tooling. Not required to run GestureOS, only to work
+# on it (testing, formatting, linting, type checking).
+
+-r requirements.txt
+
+pytest==9.1.1
+black==26.5.1
+ruff==0.16.6
+mypy==2.3.1
