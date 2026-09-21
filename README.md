@@ -14,10 +14,12 @@ Mac Webcam → OpenCV Capture → MediaPipe Hand Tracking → Normalized Feature
       Scroll • Media • Apps • Spaces
 ```
 
-> **Status: Phase 1 — macOS + VS Code Foundation.**
-> This is the project skeleton: structure, config, logging, CLI, and a
-> basic UI shell. There is no camera or gesture logic yet — that begins in
-> Phase 2. See [Roadmap](#roadmap) below.
+> **Status: Phase 2 — Vision.**
+> Camera capture, MediaPipe hand tracking, feature extraction, scale
+> normalization, and jitter smoothing are implemented and tested. There is
+> no gesture recognition or macOS command execution yet — the vision
+> engine only produces structured per-frame hand features. See
+> [Roadmap](#roadmap) below.
 
 ---
 
@@ -102,39 +104,55 @@ GestureOS/
 │   ├── config.py         # Local settings load/save (JSON)
 │   ├── constants.py      # App metadata, paths, defaults
 │   ├── models.py         # Settings schema, RunMode, ControlState, Theme
-│   └── utils/
-│       ├── logging.py    # Structured key=value logging
-│       └── timing.py     # Stopwatch / rolling average / FPS counter
+│   ├── utils/
+│   │   ├── logging.py    # Structured key=value logging
+│   │   └── timing.py     # Stopwatch / rolling average / FPS counter
+│   └── vision/
+│       ├── camera.py         # OpenCV capture wrapper (injectable backend)
+│       ├── tracker.py         # MediaPipe hand tracking adapter
+│       ├── features.py       # Raw landmarks → structured HandFeatures
+│       ├── normalization.py  # Palm-width scale normalization
+│       └── smoothing.py      # Per-hand exponential smoothing (EMA)
 └── tests/
-    └── test_config.py
+    ├── test_config.py
+    ├── test_camera.py
+    ├── test_tracker.py       # incl. one real-MediaPipe integration test
+    ├── test_features.py
+    ├── test_normalization.py
+    ├── test_smoothing.py
+    └── vision_helpers.py     # synthetic hand-pose builders used by tests
 ```
 
-The full recommended structure (`vision/`, `interaction/`, `commands/`,
-`macos/`, `ui/`, `audio/`, `persistence/`) is added incrementally as each
-phase needs it, rather than scaffolded empty up front.
+The full recommended structure (`interaction/`, `commands/`, `macos/`,
+`ui/`, `audio/`, `persistence/`) is added incrementally as each phase
+needs it, rather than scaffolded empty up front.
 
 ## Privacy (current state)
 
-All processing is local. No camera frames are captured yet in Phase 1 —
-none of the code in this phase touches the camera at all. When the vision
-engine lands in Phase 2, frames will never be logged, saved, or uploaded
-by default (see Section 33 of the design spec).
+All processing is local. The vision pipeline (Phase 2) never logs, saves,
+or uploads a camera frame — only scalar feature values (positions,
+distances, states) ever leave `camera.py`/`tracker.py` (Section 33).
 
 ## Testing
 
 ```bash
-pytest
+pytest              # full suite, including one real-MediaPipe smoke test
+pytest -m "not integration"   # skip the real-MediaPipe test (fakes only)
 ```
 
-Phase 1 covers settings load/save/corruption-recovery. Each later phase
-adds its own test module (gesture state machine, safety policy, macOS
-adapters via mocks, etc.) per the spec's test plan — the suite never
-touches the real mouse, keyboard, or a real macOS application.
+Camera and hand-tracking tests use injected fake backends — no physical
+webcam is required to run the suite. One test (marked `integration`)
+exercises the real MediaPipe runtime against a synthetic blank frame as
+an end-to-end sanity check. Each later phase adds its own test module
+(gesture state machine, safety policy, macOS adapters via mocks, etc.)
+per the spec's test plan — the suite never touches the real mouse,
+keyboard, or a real macOS application.
 
 ## Roadmap
 
-1. **macOS + VS Code foundation** ✅ *(this phase)*
-2. Vision — OpenCV camera, MediaPipe hand tracking, feature extraction
+1. **macOS + VS Code foundation** ✅
+2. **Vision** ✅ *(this phase)* — OpenCV camera, MediaPipe hand tracking,
+   feature extraction, palm-width normalization, EMA smoothing
 3. Gesture intelligence — state machine, temporal confirmation, cooldown
 4. Simulation — command registry, router, safety layer, fake macOS adapter
 5. macOS cursor — permissions, fingertip mapping, cursor movement

@@ -1,6 +1,9 @@
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = [
+    "integration: exercises a real third-party runtime (e.g. MediaPipe) instead of a fake/mock",
+]
 
 [tool.black]
 line-length = 100
