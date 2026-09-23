@@ -72,3 +72,45 @@ def make_pinch_hand(
 
     landmarks = tuple(Landmark(x=base[i][0], y=base[i][1]) for i in range(NUM_LANDMARKS))
     return RawHand(landmarks=landmarks, handedness=handedness, handedness_confidence=confidence)
+
+
+def make_fist_hand(
+    handedness: str = "right",
+    confidence: float = 0.98,
+) -> RawHand:
+    """All five fingers curled toward the palm (tip closer to wrist than
+    its PIP/MCP joint for every finger).
+    """
+    base = dict(_OPEN_HAND_XY)
+    for joint_idx, tip_idx in (
+        (LandmarkIndex.THUMB_MCP, LandmarkIndex.THUMB_TIP),
+        (LandmarkIndex.INDEX_PIP, LandmarkIndex.INDEX_TIP),
+        (LandmarkIndex.MIDDLE_PIP, LandmarkIndex.MIDDLE_TIP),
+        (LandmarkIndex.RING_PIP, LandmarkIndex.RING_TIP),
+        (LandmarkIndex.PINKY_PIP, LandmarkIndex.PINKY_TIP),
+    ):
+        jx, jy = base[joint_idx]
+        base[tip_idx] = (jx, jy + 0.03)
+
+    landmarks = tuple(Landmark(x=base[i][0], y=base[i][1]) for i in range(NUM_LANDMARKS))
+    return RawHand(landmarks=landmarks, handedness=handedness, handedness_confidence=confidence)
+
+
+def make_point_hand(
+    handedness: str = "right",
+    confidence: float = 0.98,
+) -> RawHand:
+    """Only the index finger extended; thumb, middle, ring, pinky curled."""
+    base = dict(_OPEN_HAND_XY)
+    for joint_idx, tip_idx in (
+        (LandmarkIndex.THUMB_MCP, LandmarkIndex.THUMB_TIP),
+        (LandmarkIndex.MIDDLE_PIP, LandmarkIndex.MIDDLE_TIP),
+        (LandmarkIndex.RING_PIP, LandmarkIndex.RING_TIP),
+        (LandmarkIndex.PINKY_PIP, LandmarkIndex.PINKY_TIP),
+    ):
+        jx, jy = base[joint_idx]
+        base[tip_idx] = (jx, jy + 0.03)
+    # Index finger tip is left at its open-hand (extended) position.
+
+    landmarks = tuple(Landmark(x=base[i][0], y=base[i][1]) for i in range(NUM_LANDMARKS))
+    return RawHand(landmarks=landmarks, handedness=handedness, handedness_confidence=confidence)

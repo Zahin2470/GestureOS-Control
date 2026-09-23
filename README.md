@@ -14,12 +14,13 @@ Mac Webcam → OpenCV Capture → MediaPipe Hand Tracking → Normalized Feature
       Scroll • Media • Apps • Spaces
 ```
 
-> **Status: Phase 2 — Vision.**
-> Camera capture, MediaPipe hand tracking, feature extraction, scale
-> normalization, and jitter smoothing are implemented and tested. There is
-> no gesture recognition or macOS command execution yet — the vision
-> engine only produces structured per-frame hand features. See
-> [Roadmap](#roadmap) below.
+> **Status: Phase 3 — Gesture Intelligence.**
+> On top of the vision pipeline, GestureOS now classifies poses into a
+> gesture vocabulary (pinch / open palm / fist / point), stabilizes that
+> signal over time, and turns it into discrete START / HOLD / END intent
+> events with hysteresis, minimum hold time, and cooldown. There is still
+> no macOS command execution — Intents aren't wired to anything on the
+> Mac yet. See [Roadmap](#roadmap) below.
 
 ---
 
@@ -107,12 +108,18 @@ GestureOS/
 │   ├── utils/
 │   │   ├── logging.py    # Structured key=value logging
 │   │   └── timing.py     # Stopwatch / rolling average / FPS counter
-│   └── vision/
-│       ├── camera.py         # OpenCV capture wrapper (injectable backend)
-│       ├── tracker.py         # MediaPipe hand tracking adapter
-│       ├── features.py       # Raw landmarks → structured HandFeatures
-│       ├── normalization.py  # Palm-width scale normalization
-│       └── smoothing.py      # Per-hand exponential smoothing (EMA)
+│   ├── vision/
+│   │   ├── camera.py         # OpenCV capture wrapper (injectable backend)
+│   │   ├── tracker.py         # MediaPipe hand tracking adapter
+│   │   ├── features.py       # Raw landmarks → structured HandFeatures
+│   │   ├── normalization.py  # Palm-width scale normalization
+│   │   └── smoothing.py      # Per-hand exponential smoothing (EMA)
+│   └── interaction/
+│       ├── gestures.py       # Gesture vocabulary (per-frame classification)
+│       ├── confidence.py     # Temporal voting (rolling majority vote)
+│       ├── state_machine.py  # Per-hand START/HOLD/END lifecycle
+│       ├── cooldown.py       # Generic per-key cooldown/rate-limiter
+│       └── engine.py         # Orchestrates the above into Intent events
 └── tests/
     ├── test_config.py
     ├── test_camera.py
@@ -120,18 +127,24 @@ GestureOS/
     ├── test_features.py
     ├── test_normalization.py
     ├── test_smoothing.py
+    ├── test_gestures.py
+    ├── test_confidence.py
+    ├── test_cooldown.py
+    ├── test_state_machine.py
+    ├── test_engine.py        # full pipeline integration test
     └── vision_helpers.py     # synthetic hand-pose builders used by tests
 ```
 
-The full recommended structure (`interaction/`, `commands/`, `macos/`,
-`ui/`, `audio/`, `persistence/`) is added incrementally as each phase
-needs it, rather than scaffolded empty up front.
+The full recommended structure (`commands/`, `macos/`, `ui/`, `audio/`,
+`persistence/`) is added incrementally as each phase needs it, rather
+than scaffolded empty up front.
 
 ## Privacy (current state)
 
 All processing is local. The vision pipeline (Phase 2) never logs, saves,
 or uploads a camera frame — only scalar feature values (positions,
-distances, states) ever leave `camera.py`/`tracker.py` (Section 33).
+distances, states) ever leave `camera.py`/`tracker.py` (Section 33). The
+gesture engine (Phase 3) operates entirely on those scalar features.
 
 ## Testing
 
@@ -143,17 +156,22 @@ pytest -m "not integration"   # skip the real-MediaPipe test (fakes only)
 Camera and hand-tracking tests use injected fake backends — no physical
 webcam is required to run the suite. One test (marked `integration`)
 exercises the real MediaPipe runtime against a synthetic blank frame as
-an end-to-end sanity check. Each later phase adds its own test module
-(gesture state machine, safety policy, macOS adapters via mocks, etc.)
-per the spec's test plan — the suite never touches the real mouse,
-keyboard, or a real macOS application.
+an end-to-end sanity check. The gesture engine's state-machine tests use
+a manually-advanceable fake clock, so timing behavior (min hold time,
+hysteresis, cooldown) is tested deterministically without real delays.
+Each later phase adds its own test module per the spec's test plan — the
+suite never touches the real mouse, keyboard, or a real macOS
+application.
 
 ## Roadmap
 
 1. **macOS + VS Code foundation** ✅
-2. **Vision** ✅ *(this phase)* — OpenCV camera, MediaPipe hand tracking,
-   feature extraction, palm-width normalization, EMA smoothing
-3. Gesture intelligence — state machine, temporal confirmation, cooldown
+2. **Vision** ✅ — OpenCV camera, MediaPipe hand tracking, feature
+   extraction, palm-width normalization, EMA smoothing
+3. **Gesture intelligence** ✅ *(this phase)* — gesture vocabulary
+   (pinch/open_palm/fist/point), temporal voting, state machine with
+   hysteresis + min hold time, per-gesture cooldown
+4. Simulation — command registry, router, safety layer, fake macOS adapter
 4. Simulation — command registry, router, safety layer, fake macOS adapter
 5. macOS cursor — permissions, fingertip mapping, cursor movement
 6. Click + drag
