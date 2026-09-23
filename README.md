@@ -14,13 +14,13 @@ Mac Webcam → OpenCV Capture → MediaPipe Hand Tracking → Normalized Feature
       Scroll • Media • Apps • Spaces
 ```
 
-> **Status: Phase 3 — Gesture Intelligence.**
-> On top of the vision pipeline, GestureOS now classifies poses into a
-> gesture vocabulary (pinch / open palm / fist / point), stabilizes that
-> signal over time, and turns it into discrete START / HOLD / END intent
-> events with hysteresis, minimum hold time, and cooldown. There is still
-> no macOS command execution — Intents aren't wired to anything on the
-> Mac yet. See [Roadmap](#roadmap) below.
+> **Status: Phase 4 — Simulation.**
+> Confirmed gesture Intents now flow through a command registry, a
+> safety policy (control-state gate + rate limiting), and a router that
+> dispatches to a macOS adapter — but only a *fake* adapter exists so
+> far. Nothing GestureOS does can touch the real mouse, keyboard, or any
+> macOS API yet; every dispatched command is just recorded. Real macOS
+> control starts in Phase 5. See [Roadmap](#roadmap) below.
 
 ---
 
@@ -114,12 +114,20 @@ GestureOS/
 │   │   ├── features.py       # Raw landmarks → structured HandFeatures
 │   │   ├── normalization.py  # Palm-width scale normalization
 │   │   └── smoothing.py      # Per-hand exponential smoothing (EMA)
-│   └── interaction/
-│       ├── gestures.py       # Gesture vocabulary (per-frame classification)
-│       ├── confidence.py     # Temporal voting (rolling majority vote)
-│       ├── state_machine.py  # Per-hand START/HOLD/END lifecycle
-│       ├── cooldown.py       # Generic per-key cooldown/rate-limiter
-│       └── engine.py         # Orchestrates the above into Intent events
+│   ├── interaction/
+│   │   ├── gestures.py       # Gesture vocabulary (per-frame classification)
+│   │   ├── confidence.py     # Temporal voting (rolling majority vote)
+│   │   ├── state_machine.py  # Per-hand START/HOLD/END lifecycle
+│   │   ├── cooldown.py       # Generic per-key cooldown/rate-limiter
+│   │   └── engine.py         # Orchestrates the above into Intent events
+│   ├── commands/
+│   │   ├── types.py          # CommandType enum + Command dataclass
+│   │   ├── registry.py       # Gesture/phase → CommandType binding table
+│   │   ├── safety.py         # Control-state gate + rate limiting
+│   │   └── router.py         # Intent → Command → safety check → adapter call
+│   └── macos/
+│       ├── adapter.py        # MacOSAdapter Protocol (stable contract, no impl)
+│       └── fake_adapter.py   # Simulation-mode adapter: records, never acts
 └── tests/
     ├── test_config.py
     ├── test_camera.py
@@ -131,20 +139,25 @@ GestureOS/
     ├── test_confidence.py
     ├── test_cooldown.py
     ├── test_state_machine.py
-    ├── test_engine.py        # full pipeline integration test
+    ├── test_engine.py        # vision + gesture pipeline integration test
+    ├── test_registry.py
+    ├── test_safety.py
+    ├── test_router.py
+    ├── test_simulation.py    # full pipeline → fake adapter integration test
     └── vision_helpers.py     # synthetic hand-pose builders used by tests
 ```
 
-The full recommended structure (`commands/`, `macos/`, `ui/`, `audio/`,
-`persistence/`) is added incrementally as each phase needs it, rather
-than scaffolded empty up front.
+The full recommended structure (`ui/`, `audio/`, `persistence/`) is
+added incrementally as each phase needs it, rather than scaffolded empty
+up front.
 
 ## Privacy (current state)
 
-All processing is local. The vision pipeline (Phase 2) never logs, saves,
-or uploads a camera frame — only scalar feature values (positions,
-distances, states) ever leave `camera.py`/`tracker.py` (Section 33). The
-gesture engine (Phase 3) operates entirely on those scalar features.
+All processing is local. The vision pipeline (Phase 2) never logs,
+saves, or uploads a camera frame — only scalar feature values ever leave
+`camera.py`/`tracker.py` (Section 33). The command layer (Phase 4) never
+touches a real input device or macOS API yet — `FakeMacOSAdapter` only
+records calls in memory for tests/debugging.
 
 ## Testing
 
@@ -156,22 +169,26 @@ pytest -m "not integration"   # skip the real-MediaPipe test (fakes only)
 Camera and hand-tracking tests use injected fake backends — no physical
 webcam is required to run the suite. One test (marked `integration`)
 exercises the real MediaPipe runtime against a synthetic blank frame as
-an end-to-end sanity check. The gesture engine's state-machine tests use
-a manually-advanceable fake clock, so timing behavior (min hold time,
-hysteresis, cooldown) is tested deterministically without real delays.
-Each later phase adds its own test module per the spec's test plan — the
-suite never touches the real mouse, keyboard, or a real macOS
-application.
+an end-to-end sanity check. The gesture engine's and safety policy's
+timing tests use a manually-advanceable fake clock, so behavior
+(min hold time, hysteresis, cooldown, rate limiting) is tested
+deterministically without real delays. `test_simulation.py` runs the
+*entire* pipeline — synthetic hand poses → vision → gesture engine →
+command router → fake adapter — end to end. The suite never touches the
+real mouse, keyboard, or a real macOS application.
 
 ## Roadmap
 
 1. **macOS + VS Code foundation** ✅
 2. **Vision** ✅ — OpenCV camera, MediaPipe hand tracking, feature
    extraction, palm-width normalization, EMA smoothing
-3. **Gesture intelligence** ✅ *(this phase)* — gesture vocabulary
+3. **Gesture intelligence** ✅ — gesture vocabulary
    (pinch/open_palm/fist/point), temporal voting, state machine with
    hysteresis + min hold time, per-gesture cooldown
-4. Simulation — command registry, router, safety layer, fake macOS adapter
+4. **Simulation** ✅ *(this phase)* — command registry, router, safety
+   policy (control-state gate + rate limiting, with a release-never-
+   blocked exception), fake macOS adapter
+5. macOS cursor — permissions, fingertip mapping, cursor movement
 4. Simulation — command registry, router, safety layer, fake macOS adapter
 5. macOS cursor — permissions, fingertip mapping, cursor movement
 6. Click + drag
