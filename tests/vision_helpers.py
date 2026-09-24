@@ -114,3 +114,28 @@ def make_point_hand(
 
     landmarks = tuple(Landmark(x=base[i][0], y=base[i][1]) for i in range(NUM_LANDMARKS))
     return RawHand(landmarks=landmarks, handedness=handedness, handedness_confidence=confidence)
+
+
+def make_two_finger_hand(
+    handedness: str = "right",
+    confidence: float = 0.98,
+    offset: tuple[float, float] = (0.0, 0.0),
+) -> RawHand:
+    """Index and middle fingers extended together; thumb, ring, pinky
+    curled — the two-finger scroll pose.
+    """
+    base = dict(_OPEN_HAND_XY)
+    for joint_idx, tip_idx in (
+        (LandmarkIndex.THUMB_MCP, LandmarkIndex.THUMB_TIP),
+        (LandmarkIndex.RING_PIP, LandmarkIndex.RING_TIP),
+        (LandmarkIndex.PINKY_PIP, LandmarkIndex.PINKY_TIP),
+    ):
+        jx, jy = base[joint_idx]
+        base[tip_idx] = (jx, jy + 0.03)
+    # Index and middle fingers are left at their open-hand (extended) positions.
+
+    dx, dy = offset
+    landmarks = tuple(
+        Landmark(x=base[i][0] + dx, y=base[i][1] + dy) for i in range(NUM_LANDMARKS)
+    )
+    return RawHand(landmarks=landmarks, handedness=handedness, handedness_confidence=confidence)

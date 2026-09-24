@@ -8,6 +8,7 @@ class FakeQuartzBackend:
         self.moves: list[tuple[float, float, bool]] = []
         self.downs: list[str] = []
         self.ups: list[str] = []
+        self.scrolls: list[tuple[float, float]] = []
 
     def move_cursor(self, x: float, y: float, dragging: bool = False) -> None:
         self.moves.append((x, y, dragging))
@@ -17,6 +18,9 @@ class FakeQuartzBackend:
 
     def mouse_up(self, button: str = "left") -> None:
         self.ups.append(button)
+
+    def scroll(self, dx: float, dy: float) -> None:
+        self.scrolls.append((dx, dy))
 
 
 def test_move_cursor_dispatches_to_backend() -> None:
@@ -81,7 +85,6 @@ def test_backend_is_created_lazily_once() -> None:
 @pytest.mark.parametrize(
     "call",
     [
-        lambda a: a.scroll(0, 0),
         lambda a: a.key_press("a"),
         lambda a: a.switch_app_next(),
         lambda a: a.switch_app_previous(),
@@ -96,3 +99,12 @@ def test_unimplemented_commands_raise_not_implemented(call) -> None:
 
     with pytest.raises(NotImplementedError):
         call(adapter)
+
+
+def test_scroll_dispatches_to_backend() -> None:
+    backend = FakeQuartzBackend()
+    adapter = RealMacOSAdapter(backend_factory=lambda: backend)
+
+    adapter.scroll(1.5, -2.5)
+
+    assert backend.scrolls == [(1.5, -2.5)]

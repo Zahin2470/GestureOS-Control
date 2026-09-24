@@ -221,3 +221,73 @@ def test_cursor_mapper_is_applied_when_configured() -> None:
 
     moves = adapter.calls_of("move_cursor")
     assert moves[0].args == (500.0, 400.0)
+
+
+def test_scroll_start_only_sets_reference_and_dispatches_nothing() -> None:
+    adapter = FakeMacOSAdapter()
+    safety = SafetyPolicy(get_control_state=lambda: ControlState.ACTIVE)
+    router = CommandRouter(adapter=adapter, safety=safety)
+
+    command = router.route_intent(
+        _intent(GestureType.TWO_FINGER_SCROLL, IntentPhase.START, position=Point2D(0.5, 0.5))
+    )
+
+    assert command is None
+    assert adapter.calls_of("scroll") == []
+
+
+def test_scroll_hold_with_movement_dispatches_scroll() -> None:
+    adapter = FakeMacOSAdapter()
+    safety = SafetyPolicy(get_control_state=lambda: ControlState.ACTIVE, clock=_Ticker())
+    router = CommandRouter(adapter=adapter, safety=safety)
+
+    router.route_intent(
+        _intent(GestureType.TWO_FINGER_SCROLL, IntentPhase.START, position=Point2D(0.5, 0.5))
+    )
+    router.route_intent(
+        _intent(GestureType.TWO_FINGER_SCROLL, IntentPhase.HOLD, position=Point2D(0.5, 0.5))
+    )
+    command = router.route_intent(
+        _intent(GestureType.TWO_FINGER_SCROLL, IntentPhase.HOLD, position=Point2D(0.5, 0.6))
+    )
+
+    assert command is not None
+    assert len(adapter.calls_of("scroll")) == 1
+
+
+def test_scroll_end_dispatches_nothing_but_clears_state() -> None:
+    adapter = FakeMacOSAdapter()
+    safety = SafetyPolicy(get_control_state=lambda: ControlState.ACTIVE, clock=_Ticker())
+    router = CommandRouter(adapter=adapter, safety=safety)
+
+    router.route_intent(
+        _intent(GestureType.TWO_FINGER_SCROLL, IntentPhase.START, position=Point2D(0.5, 0.5))
+    )
+    router.route_intent(
+        _intent(GestureType.TWO_FINGER_SCROLL, IntentPhase.HOLD, position=Point2D(0.5, 0.5))
+    )
+    command = router.route_intent(
+        _intent(GestureType.TWO_FINGER_SCROLL, IntentPhase.END, position=Point2D(0.5, 0.6))
+    )
+
+    assert command is None
+    assert adapter.calls_of("scroll") == []
+
+
+def test_paused_control_blocks_scroll() -> None:
+    adapter = FakeMacOSAdapter()
+    safety = SafetyPolicy(get_control_state=lambda: ControlState.PAUSED, clock=_Ticker())
+    router = CommandRouter(adapter=adapter, safety=safety)
+
+    router.route_intent(
+        _intent(GestureType.TWO_FINGER_SCROLL, IntentPhase.START, position=Point2D(0.5, 0.5))
+    )
+    router.route_intent(
+        _intent(GestureType.TWO_FINGER_SCROLL, IntentPhase.HOLD, position=Point2D(0.5, 0.5))
+    )
+    command = router.route_intent(
+        _intent(GestureType.TWO_FINGER_SCROLL, IntentPhase.HOLD, position=Point2D(0.5, 0.9))
+    )
+
+    assert command is None
+    assert adapter.calls_of("scroll") == []

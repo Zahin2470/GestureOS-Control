@@ -1,13 +1,13 @@
 """
 Real macOS adapter (Section 12 for cursor; Section 6 for click/drag;
-other methods land in later phases).
+Phase 7 for scroll; other methods land in later phases).
 
 Implements MacOSAdapter against real Quartz CGEvents. ``move_cursor``,
-``mouse_down``, and ``mouse_up`` are functional as of Phase 6 — every
-other method raises NotImplementedError with a pointer to the phase
-that will implement it, rather than silently doing nothing (a silent
-no-op on a real adapter would be a safety problem: better to fail
-loudly and let the command router log and drop it — see router.py's
+``mouse_down``, ``mouse_up``, and ``scroll`` are functional as of Phase
+7 — every other method raises NotImplementedError with a pointer to the
+phase that will implement it, rather than silently doing nothing (a
+silent no-op on a real adapter would be a safety problem: better to
+fail loudly and let the command router log and drop it — see router.py's
 exception handling).
 
 The concrete Quartz calls live behind a small injectable backend
@@ -30,6 +30,7 @@ class QuartzMouseBackend(Protocol):
     def move_cursor(self, x: float, y: float, dragging: bool = False) -> None: ...
     def mouse_down(self, button: str = "left") -> None: ...
     def mouse_up(self, button: str = "left") -> None: ...
+    def scroll(self, dx: float, dy: float) -> None: ...
 
 
 def _default_quartz_backend() -> QuartzMouseBackend:
@@ -77,6 +78,15 @@ def _default_quartz_backend() -> QuartzMouseBackend:
             )
             Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
 
+        def scroll(self, dx: float, dy: float) -> None:
+            # wheel1 = vertical, wheel2 = horizontal, in the units given
+            # (pixels here). Sign convention matches "natural scrolling"
+            # per scroll.py's docstring — unverified on real hardware.
+            event = Quartz.CGEventCreateScrollWheelEvent(
+                None, Quartz.kCGScrollEventUnitPixel, 2, round(dy), round(dx)
+            )
+            Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
+
     return _RealQuartzBackend()
 
 
@@ -119,10 +129,12 @@ class RealMacOSAdapter:
         backend.mouse_up(button)
         logger.debug("mouse_up", extra={"fields": {"button": button}})
 
-    # -- Later phases: declared now for a stable contract, not yet real -
-
     def scroll(self, dx: float, dy: float) -> None:
-        raise NotImplementedError("Scroll support lands in Phase 7")
+        backend = self._ensure_backend()
+        backend.scroll(dx, dy)
+        logger.debug("scroll", extra={"fields": {}})
+
+    # -- Later phases: declared now for a stable contract, not yet real -
 
     def key_press(self, key: str) -> None:
         raise NotImplementedError("Key press support lands in a later phase")

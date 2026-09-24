@@ -6,6 +6,7 @@ from tests.vision_helpers import (
     make_open_hand,
     make_pinch_hand,
     make_point_hand,
+    make_two_finger_hand,
 )
 
 
@@ -40,6 +41,19 @@ def test_fist_hand_classifies_as_fist() -> None:
 
 def test_point_hand_classifies_as_point() -> None:
     assert _classify_pose(make_point_hand()) == GestureType.POINT
+
+
+def test_two_finger_hand_classifies_as_two_finger_scroll() -> None:
+    assert _classify_pose(make_two_finger_hand()) == GestureType.TWO_FINGER_SCROLL
+
+
+def test_two_finger_pose_is_not_confused_with_point() -> None:
+    two_finger = _classify_pose(make_two_finger_hand())
+    point = _classify_pose(make_point_hand())
+
+    assert two_finger == GestureType.TWO_FINGER_SCROLL
+    assert point == GestureType.POINT
+    assert two_finger != point
 
 
 def test_candidate_carries_handedness_through() -> None:

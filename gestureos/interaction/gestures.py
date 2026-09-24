@@ -7,11 +7,11 @@ score. This stage is purely geometric and stateless — it has no memory
 of previous frames. Temporal stability (debounce, hysteresis, minimum
 hold duration) is added later by confidence.py and state_machine.py.
 
-Vocabulary is intentionally small for Phase 3 (the four poses later
-phases directly need: point → cursor, pinch → click/drag, open_palm /
-fist as available for later bindings). More gestures can be added later
-by adding another `_..._score()` function and one entry in the `scores`
-dict in `classify_gesture` — nothing else has to change.
+Vocabulary is intentionally small and grows only as later phases need
+it (point → cursor, pinch → click/drag, two_finger_scroll → scroll,
+open_palm / fist reserved for later bindings). Adding a gesture is
+adding one `_..._score()` function and one entry in the `scores` dict
+in `classify_gesture` — nothing else has to change.
 """
 
 from __future__ import annotations
@@ -37,6 +37,7 @@ class GestureType(str, Enum):
     OPEN_PALM = "open_palm"
     FIST = "fist"
     POINT = "point"
+    TWO_FINGER_SCROLL = "two_finger_scroll"
 
 
 @dataclass(frozen=True)
@@ -84,6 +85,15 @@ def _point_score(features: HandFeatures) -> float:
     return (1.0 if states.index else 0.0) * (others_curled / 4.0)
 
 
+def _two_finger_scroll_score(features: HandFeatures) -> float:
+    states = features.finger_extension_states
+    if states is None:
+        return 0.0
+    both_extended = 1.0 if (states.index and states.middle) else 0.0
+    others_curled = sum([not states.thumb, not states.ring, not states.pinky]) / 3.0
+    return both_extended * others_curled
+
+
 def classify_gesture(features: HandFeatures) -> GestureCandidate:
     """Classify a single frame's features into the best-matching gesture.
 
@@ -98,6 +108,7 @@ def classify_gesture(features: HandFeatures) -> GestureCandidate:
         GestureType.OPEN_PALM: _open_palm_score(features),
         GestureType.FIST: _fist_score(features),
         GestureType.POINT: _point_score(features),
+        GestureType.TWO_FINGER_SCROLL: _two_finger_scroll_score(features),
     }
     best_gesture, best_score = max(scores.items(), key=lambda item: item[1])
 

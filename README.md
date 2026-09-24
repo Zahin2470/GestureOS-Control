@@ -14,24 +14,22 @@ Mac Webcam → OpenCV Capture → MediaPipe Hand Tracking → Normalized Feature
       Scroll • Media • Apps • Spaces
 ```
 
-> **Status: Phase 6 — Click + Drag.**
-> `RealMacOSAdapter.mouse_down`/`mouse_up` are now real (Quartz), and
-> `move_cursor` gained a `dragging` flag so held-button movement posts
-> proper `LeftMouseDragged` events instead of plain `MouseMoved` ones.
-> The command layer now tracks a pinch's position through its whole
-> lifecycle: `PINCH START` snaps the cursor to the click point,
-> `PINCH HOLD` moves it — but only once the hand has moved past a small
-> deadzone, so a quick pinch stays a stable click instead of nudging the
-> cursor by a stray pixel — and `PINCH END` issues one final move if a
-> drag was in progress. Deciding "was this actually a click or a drag"
-> for UI purposes is otherwise left to whatever app receives the events,
-> same as a real trackpad.
+> **Status: Phase 7 — Scroll.**
+> Added a fifth gesture to the vocabulary: `TWO_FINGER_SCROLL` (index +
+> middle extended, others curled). While held, frame-to-frame hand
+> movement becomes incremental scroll deltas (like a trackpad, not an
+> absolute position) via a new `ScrollController`, dispatched through
+> `RealMacOSAdapter.scroll` — now real, using Quartz
+> `CGEventCreateScrollWheelEvent`. Direction follows macOS's "natural
+> scrolling" convention by default (content follows the hand), with an
+> `natural_scrolling=False` flip available since the sign can't be
+> verified against a real Mac from here.
 >
-> Same caveats as Phase 5: not yet wired into the live app loop, and
-> `move_cursor`/`mouse_down`/`mouse_up`'s real Quartz behavior can't be
-> exercised in this Linux sandbox — everything around them (mapping,
-> deadzone logic, router dispatch, safety) is genuinely tested here.
-> See [Roadmap](#roadmap) below.
+> Same caveats as Phases 5-6: not yet wired into the live app loop, and
+> the real Quartz scroll call can't be exercised in this Linux sandbox —
+> everything around it (gesture classification, delta math, router
+> dispatch, safety) is genuinely tested here. See
+> [Roadmap](#roadmap) below.
 
 ---
 
@@ -144,11 +142,12 @@ GestureOS/
 │   │   ├── registry.py       # Gesture/phase → CommandType binding table
 │   │   ├── safety.py         # Control-state gate + rate limiting
 │   │   ├── drag.py           # Click-vs-drag engagement deadzone
+│   │   ├── scroll.py         # Frame-to-frame movement → scroll deltas
 │   │   └── router.py         # Intent → Command → safety check → adapter call
 │   └── macos/
 │       ├── adapter.py        # MacOSAdapter Protocol (stable contract, no impl)
 │       ├── fake_adapter.py   # Simulation-mode adapter: records, never acts
-│       ├── real_adapter.py   # Quartz-backed adapter: cursor + click are real
+│       ├── real_adapter.py   # Quartz-backed adapter: cursor/click/scroll are real
 │       ├── permissions.py    # Accessibility permission check/request
 │       └── screen.py         # Primary screen size (AppKit, with fallback)
 └── tests/
@@ -166,7 +165,8 @@ GestureOS/
     ├── test_engine.py        # vision + gesture pipeline integration test
     ├── test_registry.py
     ├── test_safety.py
-    ├── test_router.py        # incl. click/drag deadzone behavior
+    ├── test_router.py        # incl. click/drag and scroll dispatch behavior
+    ├── test_scroll.py
     ├── test_simulation.py    # full pipeline → fake adapter integration test
     ├── test_permissions.py
     ├── test_real_adapter.py
@@ -183,8 +183,8 @@ All processing is local. The vision pipeline (Phase 2) never logs,
 saves, or uploads a camera frame — only scalar feature values ever leave
 `camera.py`/`tracker.py` (Section 33). `FakeMacOSAdapter` (Simulation
 Mode) only records calls in memory. `RealMacOSAdapter` can move the
-cursor and click (Phases 5-6) via Quartz once Accessibility permission
-is granted — nothing else on the real OS yet.
+cursor, click/drag, and scroll (Phases 5-7) via Quartz once
+Accessibility permission is granted — nothing else on the real OS yet.
 
 ## Testing
 
@@ -200,16 +200,14 @@ permission prompt is required to run the suite. One test (marked
 blank frame. `test_simulation.py` runs the entire pipeline — synthetic
 hand poses → vision → gesture engine → command router → fake adapter —
 end to end. Timing-sensitive tests (state machine, safety rate limiting,
-drag engagement) all use an explicit fake/deterministic clock rather
-than real wall time — real time introduced a genuine flaky-test bug
-during Phase 6 development (rate limiting occasionally tripped on
-back-to-back calls purely from Python's own per-statement overhead),
-which is exactly the kind of failure a fake clock is meant to prevent.
-`RealMacOSAdapter`'s actual Quartz calls are not exercised by this suite
-(there's no macOS/display to run them against here) — everything around
-them (mapping math, permission logic, drag deadzone, router dispatch
-and error handling) is. The suite never touches the real mouse,
-keyboard, or a real macOS application.
+drag/scroll engagement) all use an explicit fake/deterministic clock
+rather than real wall time — real time introduced a genuine flaky-test
+bug during Phase 6 development, which is exactly the kind of failure a
+fake clock is meant to prevent. `RealMacOSAdapter`'s actual Quartz calls
+are not exercised by this suite (there's no macOS/display to run them
+against here) — everything around them (mapping math, permission logic,
+drag/scroll math, router dispatch and error handling) is. The suite
+never touches the real mouse, keyboard, or a real macOS application.
 
 ## Roadmap
 
@@ -225,9 +223,11 @@ keyboard, or a real macOS application.
 5. **macOS cursor** ✅ — Accessibility permission check/request,
    fingertip-to-screen mapping (mirror + active region + sensitivity +
    smoothing), Quartz-backed cursor movement
-6. **Click + drag** ✅ *(this phase)* — real Quartz mouse_down/mouse_up,
-   dragging-aware cursor movement, click-vs-drag engagement deadzone
-7. Scroll
+6. **Click + drag** ✅ — real Quartz mouse_down/mouse_up, dragging-aware
+   cursor movement, click-vs-drag engagement deadzone
+7. **Scroll** ✅ *(this phase)* — two_finger_scroll gesture, frame-to-frame
+   movement → scroll deltas, real Quartz scroll wheel events
+8. App switching + safe launcher
 4. Simulation — command registry, router, safety layer, fake macOS adapter
 5. macOS cursor — permissions, fingertip mapping, cursor movement
 6. Click + drag
