@@ -5,10 +5,18 @@ from gestureos.macos.real_adapter import RealMacOSAdapter
 
 class FakeQuartzBackend:
     def __init__(self) -> None:
-        self.moves: list[tuple[float, float]] = []
+        self.moves: list[tuple[float, float, bool]] = []
+        self.downs: list[str] = []
+        self.ups: list[str] = []
 
-    def move_cursor(self, x: float, y: float) -> None:
-        self.moves.append((x, y))
+    def move_cursor(self, x: float, y: float, dragging: bool = False) -> None:
+        self.moves.append((x, y, dragging))
+
+    def mouse_down(self, button: str = "left") -> None:
+        self.downs.append(button)
+
+    def mouse_up(self, button: str = "left") -> None:
+        self.ups.append(button)
 
 
 def test_move_cursor_dispatches_to_backend() -> None:
@@ -17,7 +25,43 @@ def test_move_cursor_dispatches_to_backend() -> None:
 
     adapter.move_cursor(123.0, 456.0)
 
-    assert backend.moves == [(123.0, 456.0)]
+    assert backend.moves == [(123.0, 456.0, False)]
+
+
+def test_move_cursor_passes_dragging_flag_through() -> None:
+    backend = FakeQuartzBackend()
+    adapter = RealMacOSAdapter(backend_factory=lambda: backend)
+
+    adapter.move_cursor(1.0, 2.0, dragging=True)
+
+    assert backend.moves == [(1.0, 2.0, True)]
+
+
+def test_mouse_down_dispatches_to_backend() -> None:
+    backend = FakeQuartzBackend()
+    adapter = RealMacOSAdapter(backend_factory=lambda: backend)
+
+    adapter.mouse_down()
+
+    assert backend.downs == ["left"]
+
+
+def test_mouse_up_dispatches_to_backend() -> None:
+    backend = FakeQuartzBackend()
+    adapter = RealMacOSAdapter(backend_factory=lambda: backend)
+
+    adapter.mouse_up("right")
+
+    assert backend.ups == ["right"]
+
+
+def test_unsupported_button_rejected() -> None:
+    adapter = RealMacOSAdapter(backend_factory=lambda: FakeQuartzBackend())
+
+    with pytest.raises(ValueError):
+        adapter.mouse_down("middle")
+    with pytest.raises(ValueError):
+        adapter.mouse_up("middle")
 
 
 def test_backend_is_created_lazily_once() -> None:
@@ -37,8 +81,6 @@ def test_backend_is_created_lazily_once() -> None:
 @pytest.mark.parametrize(
     "call",
     [
-        lambda a: a.mouse_down(),
-        lambda a: a.mouse_up(),
         lambda a: a.scroll(0, 0),
         lambda a: a.key_press("a"),
         lambda a: a.switch_app_next(),

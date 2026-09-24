@@ -28,6 +28,7 @@ from enum import Enum
 from gestureos.interaction.confidence import StableCandidate
 from gestureos.interaction.cooldown import CooldownGate
 from gestureos.interaction.gestures import GestureType
+from gestureos.vision.features import Point2D
 
 logger = logging.getLogger("gestureos.interaction.state_machine")
 
@@ -50,6 +51,9 @@ class Intent:
     confidence: float
     handedness: str | None
     timestamp: float
+    position: Point2D | None = None  # normalized (0-1) fingertip position
+    # at the moment of this event. None unless GestureEngine attaches it.
+    # Unused before Phase 6 (cursor/drag); earlier phases never read it.
 
 
 class _State(str, Enum):

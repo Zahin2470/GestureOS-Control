@@ -20,10 +20,10 @@ def test_pinch_end_maps_to_mouse_up() -> None:
     assert command_type == CommandType.MOUSE_UP
 
 
-def test_pinch_hold_has_no_binding_yet() -> None:
+def test_pinch_hold_maps_to_mouse_move() -> None:
     command_type = resolve_command_type(_intent(GestureType.PINCH, IntentPhase.HOLD))
 
-    assert command_type is None
+    assert command_type == CommandType.MOUSE_MOVE
 
 
 def test_unbound_gesture_returns_none() -> None:

@@ -43,8 +43,8 @@ class FakeMacOSAdapter:
         self.calls.append(call)
         logger.info("simulated_command", extra={"fields": {"method": method}})
 
-    def move_cursor(self, x: float, y: float) -> None:
-        self._record("move_cursor", x, y)
+    def move_cursor(self, x: float, y: float, dragging: bool = False) -> None:
+        self._record("move_cursor", x, y, dragging=dragging)
 
     def mouse_down(self, button: str = "left") -> None:
         self._record("mouse_down", button=button)

@@ -8,6 +8,7 @@ the safety/command layer (Phase 4) takes over.
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 
 from gestureos.interaction.confidence import ConfidenceTracker
 from gestureos.interaction.gestures import classify_gesture
@@ -58,5 +59,9 @@ class GestureEngine:
             machine = self._machine_for(hand.handedness)
             intent = machine.update(stable)
             if intent is not None:
+                # Attach where the hand actually is right now, so
+                # anything downstream (cursor/drag, from Phase 6) doesn't
+                # need to re-derive position from raw features itself.
+                intent = replace(intent, position=hand.index_tip)
                 intents.append(intent)
         return tuple(intents)

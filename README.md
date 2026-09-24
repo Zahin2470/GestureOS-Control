@@ -14,29 +14,24 @@ Mac Webcam → OpenCV Capture → MediaPipe Hand Tracking → Normalized Feature
       Scroll • Media • Apps • Spaces
 ```
 
-> **Status: Phase 5 — macOS Cursor.**
-> GestureOS can now check/request the Accessibility permission it needs,
-> map a fingertip position to a screen pixel coordinate (mirroring +
-> active region + sensitivity + smoothing), and move the real cursor via
-> a Quartz-backed adapter — `RealMacOSAdapter.move_cursor` is fully
-> implemented. Click, drag, scroll, app switching, media, and Spaces are
-> declared on the same adapter contract but still raise
-> `NotImplementedError` until their phases land; the router now catches
-> that (and any other adapter error) so it never crashes the app.
+> **Status: Phase 6 — Click + Drag.**
+> `RealMacOSAdapter.mouse_down`/`mouse_up` are now real (Quartz), and
+> `move_cursor` gained a `dragging` flag so held-button movement posts
+> proper `LeftMouseDragged` events instead of plain `MouseMoved` ones.
+> The command layer now tracks a pinch's position through its whole
+> lifecycle: `PINCH START` snaps the cursor to the click point,
+> `PINCH HOLD` moves it — but only once the hand has moved past a small
+> deadzone, so a quick pinch stays a stable click instead of nudging the
+> cursor by a stray pixel — and `PINCH END` issues one final move if a
+> drag was in progress. Deciding "was this actually a click or a drag"
+> for UI purposes is otherwise left to whatever app receives the events,
+> same as a real trackpad.
 >
-> **Not yet wired into the live app loop.** Like Phases 2-4, this phase
-> ships tested components, not a running camera-to-cursor demo — the
-> pygame shell from Phase 1 still just shows static status text. Live
-> wiring (camera → vision → gestures → commands → cursor, running every
-> frame with a HUD) happens once enough command bindings exist to make
-> it meaningful, planned for after Phase 9.
->
-> **This phase touches the real OS.** `move_cursor`'s Quartz code is
-> correct PyObjC usage but genuinely untestable in this Linux sandbox —
-> everything else here (mapping math, permission logic, dispatch) is
-> unit tested the same way as previous phases, but `move_cursor` itself
-> can only be verified by running it on your Mac. See
-> [Roadmap](#roadmap) below.
+> Same caveats as Phase 5: not yet wired into the live app loop, and
+> `move_cursor`/`mouse_down`/`mouse_up`'s real Quartz behavior can't be
+> exercised in this Linux sandbox — everything around them (mapping,
+> deadzone logic, router dispatch, safety) is genuinely tested here.
+> See [Roadmap](#roadmap) below.
 
 ---
 
@@ -148,11 +143,12 @@ GestureOS/
 │   │   ├── types.py          # CommandType enum + Command dataclass
 │   │   ├── registry.py       # Gesture/phase → CommandType binding table
 │   │   ├── safety.py         # Control-state gate + rate limiting
+│   │   ├── drag.py           # Click-vs-drag engagement deadzone
 │   │   └── router.py         # Intent → Command → safety check → adapter call
 │   └── macos/
 │       ├── adapter.py        # MacOSAdapter Protocol (stable contract, no impl)
 │       ├── fake_adapter.py   # Simulation-mode adapter: records, never acts
-│       ├── real_adapter.py   # Quartz-backed adapter: move_cursor is real
+│       ├── real_adapter.py   # Quartz-backed adapter: cursor + click are real
 │       ├── permissions.py    # Accessibility permission check/request
 │       └── screen.py         # Primary screen size (AppKit, with fallback)
 └── tests/
@@ -170,7 +166,7 @@ GestureOS/
     ├── test_engine.py        # vision + gesture pipeline integration test
     ├── test_registry.py
     ├── test_safety.py
-    ├── test_router.py
+    ├── test_router.py        # incl. click/drag deadzone behavior
     ├── test_simulation.py    # full pipeline → fake adapter integration test
     ├── test_permissions.py
     ├── test_real_adapter.py
@@ -186,9 +182,9 @@ up front.
 All processing is local. The vision pipeline (Phase 2) never logs,
 saves, or uploads a camera frame — only scalar feature values ever leave
 `camera.py`/`tracker.py` (Section 33). `FakeMacOSAdapter` (Simulation
-Mode) only records calls in memory. `RealMacOSAdapter` (Phase 5) can
-move the real cursor via Quartz once Accessibility permission is
-granted — nothing else on the real OS yet.
+Mode) only records calls in memory. `RealMacOSAdapter` can move the
+cursor and click (Phases 5-6) via Quartz once Accessibility permission
+is granted — nothing else on the real OS yet.
 
 ## Testing
 
@@ -203,10 +199,16 @@ permission prompt is required to run the suite. One test (marked
 `integration`) exercises the real MediaPipe runtime against a synthetic
 blank frame. `test_simulation.py` runs the entire pipeline — synthetic
 hand poses → vision → gesture engine → command router → fake adapter —
-end to end. `RealMacOSAdapter.move_cursor`'s actual Quartz call is not
-exercised by this suite (there's no macOS/display to run it against
-here) — everything around it (mapping math, permission logic, router
-dispatch and error handling) is. The suite never touches the real mouse,
+end to end. Timing-sensitive tests (state machine, safety rate limiting,
+drag engagement) all use an explicit fake/deterministic clock rather
+than real wall time — real time introduced a genuine flaky-test bug
+during Phase 6 development (rate limiting occasionally tripped on
+back-to-back calls purely from Python's own per-statement overhead),
+which is exactly the kind of failure a fake clock is meant to prevent.
+`RealMacOSAdapter`'s actual Quartz calls are not exercised by this suite
+(there's no macOS/display to run them against here) — everything around
+them (mapping math, permission logic, drag deadzone, router dispatch
+and error handling) is. The suite never touches the real mouse,
 keyboard, or a real macOS application.
 
 ## Roadmap
@@ -220,10 +222,12 @@ keyboard, or a real macOS application.
 4. **Simulation** ✅ — command registry, router, safety policy
    (control-state gate + rate limiting, with a release-never-blocked
    exception), fake macOS adapter
-5. **macOS cursor** ✅ *(this phase)* — Accessibility permission
-   check/request, fingertip-to-screen mapping (mirror + active region +
-   sensitivity + smoothing), Quartz-backed cursor movement
-6. Click + drag
+5. **macOS cursor** ✅ — Accessibility permission check/request,
+   fingertip-to-screen mapping (mirror + active region + sensitivity +
+   smoothing), Quartz-backed cursor movement
+6. **Click + drag** ✅ *(this phase)* — real Quartz mouse_down/mouse_up,
+   dragging-aware cursor movement, click-vs-drag engagement deadzone
+7. Scroll
 4. Simulation — command registry, router, safety layer, fake macOS adapter
 5. macOS cursor — permissions, fingertip mapping, cursor movement
 6. Click + drag

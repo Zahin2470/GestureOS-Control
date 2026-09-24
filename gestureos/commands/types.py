@@ -20,6 +20,7 @@ from gestureos.interaction.state_machine import IntentPhase
 
 class CommandType(str, Enum):
     MOUSE_DOWN = "mouse_down"
+    MOUSE_MOVE = "mouse_move"
     MOUSE_UP = "mouse_up"
     SCROLL = "scroll"
     SWITCH_APP_NEXT = "switch_app_next"

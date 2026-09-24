@@ -1,12 +1,17 @@
 """
-Command router (Sections 20-22).
+Command router (Sections 20-22, refined for click/drag in Phase 6).
 
     Intent -> registry lookup -> Command -> safety policy -> adapter call
 
 This is where an Intent produced by the gesture engine (Phase 3) either
 becomes a real (or, in Phase 4, simulated) macOS side effect, or gets
-dropped — either because no command is bound to it, or because the
-safety policy blocked it.
+dropped — either because no command is bound to it, because the safety
+policy blocked it, or (new in Phase 6, for MOUSE_MOVE specifically)
+because the drag hasn't moved far enough yet to engage (see drag.py).
+
+MOUSE_DOWN, MOUSE_MOVE, and MOUSE_UP are handled explicitly rather than
+through the generic dispatch table, because they share state (the
+in-progress drag) that the other, stateless commands don't need.
 """
 
 from __future__ import annotations
@@ -14,47 +19,100 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 
+from gestureos.commands.drag import DragController
 from gestureos.commands.registry import resolve_command_type
 from gestureos.commands.safety import SafetyPolicy
 from gestureos.commands.types import Command, CommandType
 from gestureos.interaction.state_machine import Intent
 from gestureos.macos.adapter import MacOSAdapter
+from gestureos.vision.features import Point2D
+from gestureos.vision.mapping import CursorMapper
 
 logger = logging.getLogger("gestureos.commands.router")
 
 
 class CommandRouter:
-    def __init__(self, adapter: MacOSAdapter, safety: SafetyPolicy) -> None:
+    def __init__(
+        self,
+        adapter: MacOSAdapter,
+        safety: SafetyPolicy,
+        cursor_mapper: CursorMapper | None = None,
+        drag_controller: DragController | None = None,
+    ) -> None:
         self._adapter = adapter
         self._safety = safety
-        self._dispatch: dict[CommandType, Callable[[Command], None]] = {
-            CommandType.MOUSE_DOWN: lambda cmd: self._adapter.mouse_down(
-                cmd.params.get("button", "left")
+        self._cursor_mapper = cursor_mapper
+        self._drag_controller = drag_controller or DragController()
+        self._dispatch: dict[CommandType, Callable[[Command], bool]] = {
+            CommandType.SCROLL: self._always(
+                lambda cmd: self._adapter.scroll(cmd.params.get("dx", 0.0), cmd.params.get("dy", 0.0))
             ),
-            CommandType.MOUSE_UP: lambda cmd: self._adapter.mouse_up(
-                cmd.params.get("button", "left")
+            CommandType.SWITCH_APP_NEXT: self._always(lambda cmd: self._adapter.switch_app_next()),
+            CommandType.SWITCH_APP_PREVIOUS: self._always(
+                lambda cmd: self._adapter.switch_app_previous()
             ),
-            CommandType.SCROLL: lambda cmd: self._adapter.scroll(
-                cmd.params.get("dx", 0.0), cmd.params.get("dy", 0.0)
+            CommandType.LAUNCH_APP: self._always(
+                lambda cmd: self._adapter.launch_app(cmd.params.get("name", ""))
             ),
-            CommandType.SWITCH_APP_NEXT: lambda cmd: self._adapter.switch_app_next(),
-            CommandType.SWITCH_APP_PREVIOUS: lambda cmd: self._adapter.switch_app_previous(),
-            CommandType.LAUNCH_APP: lambda cmd: self._adapter.launch_app(
-                cmd.params.get("name", "")
-            ),
-            CommandType.MEDIA_PLAY_PAUSE: lambda cmd: self._adapter.media_play_pause(),
-            CommandType.SPACE_NEXT: lambda cmd: self._adapter.space_next(),
-            CommandType.SPACE_PREVIOUS: lambda cmd: self._adapter.space_previous(),
+            CommandType.MEDIA_PLAY_PAUSE: self._always(lambda cmd: self._adapter.media_play_pause()),
+            CommandType.SPACE_NEXT: self._always(lambda cmd: self._adapter.space_next()),
+            CommandType.SPACE_PREVIOUS: self._always(lambda cmd: self._adapter.space_previous()),
         }
+
+    @staticmethod
+    def _always(fn: Callable[[Command], None]) -> Callable[[Command], bool]:
+        def wrapped(cmd: Command) -> bool:
+            fn(cmd)
+            return True
+
+        return wrapped
+
+    def _map(self, position: Point2D) -> Point2D:
+        if self._cursor_mapper is None:
+            return position  # no mapper configured (e.g. most tests) —
+            # pass the normalized position straight through.
+        return self._cursor_mapper.map(position)
+
+    def _handle_mouse_down(self, command: Command) -> bool:
+        position = command.params.get("position")
+        self._drag_controller.begin(position)
+        if position is not None:
+            mapped = self._map(position)
+            self._adapter.move_cursor(mapped.x, mapped.y, dragging=False)
+        self._adapter.mouse_down(command.params.get("button", "left"))
+        return True
+
+    def _handle_mouse_move(self, command: Command) -> bool:
+        raw_position = command.params.get("position")
+        engaged_position = self._drag_controller.update(raw_position)
+        if engaged_position is None:
+            return False  # still inside the click deadzone — cursor stays put
+        mapped = self._map(engaged_position)
+        self._adapter.move_cursor(mapped.x, mapped.y, dragging=True)
+        return True
+
+    def _handle_mouse_up(self, command: Command) -> bool:
+        raw_position = command.params.get("position")
+        if raw_position is not None and self._drag_controller.is_engaged:
+            mapped = self._map(raw_position)
+            self._adapter.move_cursor(mapped.x, mapped.y, dragging=True)
+        self._drag_controller.end()
+        self._adapter.mouse_up(command.params.get("button", "left"))
+        return True
 
     def route_intent(self, intent: Intent) -> Command | None:
         """Process one Intent. Returns the Command that was actually
-        dispatched, or None if nothing happened (unbound gesture, or
-        blocked by the safety policy).
+        dispatched, or None if nothing happened (unbound gesture,
+        blocked by the safety policy, or — for MOUSE_MOVE — still
+        inside the click deadzone).
         """
         command_type = resolve_command_type(intent)
         if command_type is None:
             return None
+
+        params: dict[str, object] = {}
+        if intent.position is not None:
+            params["position"] = intent.position
 
         command = Command(
             type=command_type,
@@ -62,6 +120,7 @@ class CommandRouter:
             source_phase=intent.phase,
             handedness=intent.handedness,
             timestamp=intent.timestamp,
+            params=params,
         )
 
         decision = self._safety.check(command)
@@ -72,15 +131,23 @@ class CommandRouter:
             )
             return None
 
-        handler = self._dispatch.get(command_type)
-        if handler is None:
-            logger.warning(
-                "command_unhandled", extra={"fields": {"command": command_type.value}}
-            )
-            return None
+        if command_type is CommandType.MOUSE_DOWN:
+            handler: Callable[[Command], bool] = self._handle_mouse_down
+        elif command_type is CommandType.MOUSE_MOVE:
+            handler = self._handle_mouse_move
+        elif command_type is CommandType.MOUSE_UP:
+            handler = self._handle_mouse_up
+        else:
+            found = self._dispatch.get(command_type)
+            if found is None:
+                logger.warning(
+                    "command_unhandled", extra={"fields": {"command": command_type.value}}
+                )
+                return None
+            handler = found
 
         try:
-            handler(command)
+            executed = handler(command)
         except NotImplementedError as exc:
             logger.warning(
                 "command_not_implemented",
@@ -92,6 +159,9 @@ class CommandRouter:
                 "command_dispatch_failed",
                 extra={"fields": {"command": command_type.value, "error": type(exc).__name__}},
             )
+            return None
+
+        if not executed:
             return None
 
         logger.info(
