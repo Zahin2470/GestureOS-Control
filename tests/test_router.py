@@ -74,3 +74,43 @@ def test_route_intents_processes_a_batch_and_drops_unbound_ones() -> None:
 
     assert len(commands) == 1
     assert commands[0].type.value == "mouse_down"
+
+
+class _RaisingAdapter:
+    """An adapter whose mouse_down isn't implemented yet, like
+    RealMacOSAdapter before Phase 6 lands.
+    """
+
+    def mouse_down(self, button: str = "left") -> None:
+        raise NotImplementedError("Click support lands in Phase 6")
+
+    def mouse_up(self, button: str = "left") -> None:
+        raise RuntimeError("some unexpected OS-level failure")
+
+    def move_cursor(self, x: float, y: float) -> None: ...
+    def scroll(self, dx: float, dy: float) -> None: ...
+    def key_press(self, key: str) -> None: ...
+    def switch_app_next(self) -> None: ...
+    def switch_app_previous(self) -> None: ...
+    def launch_app(self, name: str) -> None: ...
+    def media_play_pause(self) -> None: ...
+    def space_next(self) -> None: ...
+    def space_previous(self) -> None: ...
+
+
+def test_not_implemented_adapter_method_is_caught_not_raised() -> None:
+    safety = SafetyPolicy(get_control_state=lambda: ControlState.ACTIVE)
+    router = CommandRouter(adapter=_RaisingAdapter(), safety=safety)
+
+    command = router.route_intent(_intent(GestureType.PINCH, IntentPhase.START))
+
+    assert command is None  # no exception propagates out of route_intent
+
+
+def test_unexpected_adapter_exception_is_caught_not_raised() -> None:
+    safety = SafetyPolicy(get_control_state=lambda: ControlState.ACTIVE)
+    router = CommandRouter(adapter=_RaisingAdapter(), safety=safety)
+
+    command = router.route_intent(_intent(GestureType.PINCH, IntentPhase.END))
+
+    assert command is None

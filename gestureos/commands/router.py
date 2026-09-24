@@ -79,7 +79,21 @@ class CommandRouter:
             )
             return None
 
-        handler(command)
+        try:
+            handler(command)
+        except NotImplementedError as exc:
+            logger.warning(
+                "command_not_implemented",
+                extra={"fields": {"command": command_type.value, "reason": str(exc)}},
+            )
+            return None
+        except Exception as exc:  # noqa: BLE001 - adapters may raise all sorts of OS errors
+            logger.error(
+                "command_dispatch_failed",
+                extra={"fields": {"command": command_type.value, "error": type(exc).__name__}},
+            )
+            return None
+
         logger.info(
             "command_executed",
             extra={
