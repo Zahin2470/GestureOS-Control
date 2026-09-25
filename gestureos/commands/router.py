@@ -1,6 +1,6 @@
 """
-Command router (Sections 20-22, refined for click/drag in Phase 6 and
-scroll in Phase 7).
+Command router (Sections 20-22, refined for click/drag in Phase 6,
+scroll in Phase 7, and app switching in Phase 8).
 
     Intent -> registry lookup -> Command -> safety policy -> adapter call
 
@@ -8,13 +8,14 @@ This is where an Intent produced by the gesture engine (Phase 3) either
 becomes a real (or, in Phase 4, simulated) macOS side effect, or gets
 dropped — either because no command is bound to it, because the safety
 policy blocked it, because the drag hasn't moved far enough yet to
-engage (drag.py), or because the scroll gesture hasn't moved enough
-this frame to produce a nonzero delta (scroll.py).
+engage (drag.py), because the scroll gesture hasn't moved enough this
+frame to produce a nonzero delta (scroll.py), or because the swipe
+hasn't crossed its threshold yet (switch.py).
 
-MOUSE_DOWN, MOUSE_MOVE, MOUSE_UP, and SCROLL are handled explicitly
-rather than through the generic dispatch table, because they share
-state (an in-progress drag or scroll) that the other, stateless
-commands don't need.
+MOUSE_DOWN, MOUSE_MOVE, MOUSE_UP, SCROLL, and APP_SWITCH are handled
+explicitly rather than through the generic dispatch table, because they
+share state (an in-progress drag, scroll, or swipe) that the other,
+stateless commands don't need.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ from gestureos.commands.drag import DragController
 from gestureos.commands.registry import resolve_command_type
 from gestureos.commands.safety import SafetyPolicy
 from gestureos.commands.scroll import ScrollController
+from gestureos.commands.switch import SwipeController, SwipeDirection
 from gestureos.commands.types import Command, CommandType
 from gestureos.interaction.state_machine import Intent, IntentPhase
 from gestureos.macos.adapter import MacOSAdapter
@@ -43,12 +45,14 @@ class CommandRouter:
         cursor_mapper: CursorMapper | None = None,
         drag_controller: DragController | None = None,
         scroll_controller: ScrollController | None = None,
+        swipe_controller: SwipeController | None = None,
     ) -> None:
         self._adapter = adapter
         self._safety = safety
         self._cursor_mapper = cursor_mapper
         self._drag_controller = drag_controller or DragController()
         self._scroll_controller = scroll_controller or ScrollController()
+        self._swipe_controller = swipe_controller or SwipeController()
         self._dispatch: dict[CommandType, Callable[[Command], bool]] = {
             CommandType.SWITCH_APP_NEXT: self._always(lambda cmd: self._adapter.switch_app_next()),
             CommandType.SWITCH_APP_PREVIOUS: self._always(
@@ -119,11 +123,29 @@ class CommandRouter:
         self._adapter.scroll(dx, dy)
         return True
 
+    def _handle_app_switch(self, command: Command) -> bool:
+        position = command.params.get("position")
+        if command.source_phase is IntentPhase.START:
+            self._swipe_controller.begin(position)
+            return False  # just establishing a reference point
+        if command.source_phase is IntentPhase.END:
+            self._swipe_controller.end()
+            return False
+
+        direction = self._swipe_controller.update(position)
+        if direction is None:
+            return False  # threshold not crossed yet this hold
+        if direction is SwipeDirection.RIGHT:
+            self._adapter.switch_app_next()
+        else:
+            self._adapter.switch_app_previous()
+        return True
+
     def route_intent(self, intent: Intent) -> Command | None:
         """Process one Intent. Returns the Command that was actually
         dispatched, or None if nothing happened (unbound gesture,
-        blocked by the safety policy, or — for MOUSE_MOVE/SCROLL —
-        still inside a deadzone/reference-setting frame).
+        blocked by the safety policy, or — for MOUSE_MOVE/SCROLL/
+        APP_SWITCH — still inside a deadzone/reference-setting frame).
         """
         command_type = resolve_command_type(intent)
         if command_type is None:
@@ -158,6 +180,8 @@ class CommandRouter:
             handler = self._handle_mouse_up
         elif command_type is CommandType.SCROLL:
             handler = self._handle_scroll
+        elif command_type is CommandType.APP_SWITCH:
+            handler = self._handle_app_switch
         else:
             found = self._dispatch.get(command_type)
             if found is None:

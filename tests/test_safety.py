@@ -18,13 +18,16 @@ class FakeClock:
         self.now += seconds
 
 
-def _command(command_type: CommandType, timestamp: float = 0.0) -> Command:
+def _command(
+    command_type: CommandType, timestamp: float = 0.0, params: dict | None = None
+) -> Command:
     return Command(
         type=command_type,
         source_gesture=GestureType.PINCH,
         source_phase=IntentPhase.START,
         handedness="right",
         timestamp=timestamp,
+        params=params or {},
     )
 
 
@@ -107,3 +110,55 @@ def test_mouse_up_never_consumes_the_rate_limit_budget() -> None:
 def test_invalid_rate_rejected() -> None:
     with pytest.raises(ValueError):
         SafetyPolicy(get_control_state=lambda: ControlState.ACTIVE, max_commands_per_second=0)
+
+
+def test_launch_app_blocked_when_no_allowlist_configured() -> None:
+    policy = SafetyPolicy(get_control_state=lambda: ControlState.ACTIVE)
+
+    decision = policy.check(_command(CommandType.LAUNCH_APP, params={"name": "Safari"}))
+
+    assert decision.allowed is False
+    assert decision.reason == "no_allowlist_configured"
+
+
+def test_launch_app_blocked_when_not_in_allowlist() -> None:
+    policy = SafetyPolicy(
+        get_control_state=lambda: ControlState.ACTIVE,
+        allowed_apps=frozenset({"Safari", "Calculator"}),
+    )
+
+    decision = policy.check(_command(CommandType.LAUNCH_APP, params={"name": "Terminal"}))
+
+    assert decision.allowed is False
+    assert decision.reason == "app_not_allowed"
+
+
+def test_launch_app_allowed_when_in_allowlist() -> None:
+    policy = SafetyPolicy(
+        get_control_state=lambda: ControlState.ACTIVE,
+        allowed_apps=frozenset({"Safari", "Calculator"}),
+    )
+
+    decision = policy.check(_command(CommandType.LAUNCH_APP, params={"name": "Safari"}))
+
+    assert decision.allowed is True
+
+
+def test_launch_app_still_blocked_when_control_paused_even_with_allowlist() -> None:
+    policy = SafetyPolicy(
+        get_control_state=lambda: ControlState.PAUSED,
+        allowed_apps=frozenset({"Safari"}),
+    )
+
+    decision = policy.check(_command(CommandType.LAUNCH_APP, params={"name": "Safari"}))
+
+    assert decision.allowed is False
+    assert decision.reason == "control_paused"
+
+
+def test_non_launch_commands_unaffected_by_allowlist() -> None:
+    policy = SafetyPolicy(get_control_state=lambda: ControlState.ACTIVE, allowed_apps=None)
+
+    decision = policy.check(_command(CommandType.APP_SWITCH))
+
+    assert decision.allowed is True

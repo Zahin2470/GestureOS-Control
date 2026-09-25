@@ -1,16 +1,23 @@
 """
 Real macOS adapter (Section 12 for cursor; Section 6 for click/drag;
-Phase 7 for scroll; other methods land in later phases).
+Phase 7 for scroll; Phase 8 for app switching + safe launching; other
+methods land in later phases).
 
-Implements MacOSAdapter against real Quartz CGEvents. ``move_cursor``,
-``mouse_down``, ``mouse_up``, and ``scroll`` are functional as of Phase
-7 — every other method raises NotImplementedError with a pointer to the
-phase that will implement it, rather than silently doing nothing (a
-silent no-op on a real adapter would be a safety problem: better to
+Implements MacOSAdapter against real Quartz CGEvents and AppKit.
+``move_cursor``, ``mouse_down``, ``mouse_up``, ``scroll``,
+``switch_app_next/previous``, and ``launch_app`` are functional as of
+Phase 8 — every other method raises NotImplementedError with a pointer
+to the phase that will implement it, rather than silently doing nothing
+(a silent no-op on a real adapter would be a safety problem: better to
 fail loudly and let the command router log and drop it — see router.py's
 exception handling).
 
-The concrete Quartz calls live behind a small injectable backend
+``launch_app`` itself never decides what's "safe" to launch — that
+allowlist check happens one layer up, in SafetyPolicy, before this
+adapter is ever called (Phase 8 — "safe launcher"). This class just
+does what it's told.
+
+The concrete Quartz/AppKit calls live behind a small injectable backend
 Protocol, the same pattern used by camera.py and tracker.py, so this
 adapter's dispatch logic is unit-testable without a real macOS process.
 """
@@ -24,6 +31,7 @@ from typing import Protocol
 logger = logging.getLogger("gestureos.macos.real_adapter")
 
 _SUPPORTED_BUTTONS = ("left", "right")
+_KVK_TAB = 0x30
 
 
 class QuartzMouseBackend(Protocol):
@@ -31,6 +39,9 @@ class QuartzMouseBackend(Protocol):
     def mouse_down(self, button: str = "left") -> None: ...
     def mouse_up(self, button: str = "left") -> None: ...
     def scroll(self, dx: float, dy: float) -> None: ...
+    def switch_app_next(self) -> None: ...
+    def switch_app_previous(self) -> None: ...
+    def launch_app(self, name: str) -> None: ...
 
 
 def _default_quartz_backend() -> QuartzMouseBackend:
@@ -53,6 +64,17 @@ def _default_quartz_backend() -> QuartzMouseBackend:
         "left": Quartz.kCGMouseButtonLeft,
         "right": Quartz.kCGMouseButtonRight,
     }
+
+    def post_cmd_tab(shift: bool) -> None:
+        flags = Quartz.kCGEventFlagMaskCommand
+        if shift:
+            flags |= Quartz.kCGEventFlagMaskShift
+        down = Quartz.CGEventCreateKeyboardEvent(None, _KVK_TAB, True)
+        Quartz.CGEventSetFlags(down, flags)
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap, down)
+        up = Quartz.CGEventCreateKeyboardEvent(None, _KVK_TAB, False)
+        Quartz.CGEventSetFlags(up, flags)
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap, up)
 
     class _RealQuartzBackend:
         def _current_location(self):
@@ -87,6 +109,22 @@ def _default_quartz_backend() -> QuartzMouseBackend:
             )
             Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
 
+        def switch_app_next(self) -> None:
+            # A single quick Cmd+Tab: switches straight to the previous
+            # app, same as a real one-tap press (not a held cycling UI).
+            post_cmd_tab(shift=False)
+
+        def switch_app_previous(self) -> None:
+            # Cmd+Shift+Tab cycles the other direction.
+            post_cmd_tab(shift=True)
+
+        def launch_app(self, name: str) -> None:
+            from AppKit import NSWorkspace  # Lazy: only needed on real launch.
+
+            success = NSWorkspace.sharedWorkspace().launchApplication_(name)
+            if not success:
+                raise RuntimeError(f"NSWorkspace could not launch {name!r}")
+
     return _RealQuartzBackend()
 
 
@@ -110,7 +148,7 @@ class RealMacOSAdapter:
         if button not in _SUPPORTED_BUTTONS:
             raise ValueError(f"unsupported button {button!r}; expected one of {_SUPPORTED_BUTTONS}")
 
-    # -- Phase 5-6: functional -------------------------------------------
+    # -- Phase 5-8: functional --------------------------------------------
 
     def move_cursor(self, x: float, y: float, dragging: bool = False) -> None:
         backend = self._ensure_backend()
@@ -134,19 +172,25 @@ class RealMacOSAdapter:
         backend.scroll(dx, dy)
         logger.debug("scroll", extra={"fields": {}})
 
+    def switch_app_next(self) -> None:
+        backend = self._ensure_backend()
+        backend.switch_app_next()
+        logger.debug("switch_app_next", extra={"fields": {}})
+
+    def switch_app_previous(self) -> None:
+        backend = self._ensure_backend()
+        backend.switch_app_previous()
+        logger.debug("switch_app_previous", extra={"fields": {}})
+
+    def launch_app(self, name: str) -> None:
+        backend = self._ensure_backend()
+        backend.launch_app(name)
+        logger.debug("launch_app", extra={"fields": {"name": name}})
+
     # -- Later phases: declared now for a stable contract, not yet real -
 
     def key_press(self, key: str) -> None:
         raise NotImplementedError("Key press support lands in a later phase")
-
-    def switch_app_next(self) -> None:
-        raise NotImplementedError("App switching lands in Phase 8")
-
-    def switch_app_previous(self) -> None:
-        raise NotImplementedError("App switching lands in Phase 8")
-
-    def launch_app(self, name: str) -> None:
-        raise NotImplementedError("App launching lands in Phase 8")
 
     def media_play_pause(self) -> None:
         raise NotImplementedError("Media controls land in Phase 9")

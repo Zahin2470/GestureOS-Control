@@ -2,21 +2,27 @@
 Safety policy (Section 22) — the last gate every Command passes through
 before the router will dispatch it to a macOS adapter.
 
-Two independent checks:
+Three independent checks:
 
   1. Control state — commands are blocked whenever the app is paused
      (ControlState.PAUSED), regardless of gesture confidence. This is
      the same control_state the UI shell already displays (Phase 1).
 
-  2. Rate limiting — a defensive cap on command frequency, independent
+  2. App launch allowlist (Phase 8 — "safe launcher") — LAUNCH_APP
+     commands are blocked unless the requested app name is in an
+     explicit allowlist. Fail-closed by default: with no allowlist
+     configured, every launch is blocked, not allowed. A gesture
+     misfire should never be able to open an arbitrary application.
+
+  3. Rate limiting — a defensive cap on command frequency, independent
      of the gesture-level cooldown already enforced upstream (Section
      11), so a malfunctioning binding can't spam the OS.
 
-One deliberate exception to both checks: RELEASE_COMMAND_TYPES (e.g.
+One deliberate exception to all three: RELEASE_COMMAND_TYPES (e.g.
 MOUSE_UP) are always allowed through. Blocking a *release* is more
 dangerous than allowing one — it can leave a mouse button stuck down on
-the real OS. Pausing control or hitting the rate limit should never be
-able to do that.
+the real OS. Pausing control, an unconfigured allowlist, or hitting the
+rate limit should never be able to do that.
 """
 
 from __future__ import annotations
@@ -26,7 +32,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from gestureos.commands.types import RELEASE_COMMAND_TYPES, Command
+from gestureos.commands.types import RELEASE_COMMAND_TYPES, Command, CommandType
 from gestureos.models import ControlState
 
 logger = logging.getLogger("gestureos.commands.safety")
@@ -43,12 +49,14 @@ class SafetyPolicy:
         self,
         get_control_state: Callable[[], ControlState],
         max_commands_per_second: float = 20.0,
+        allowed_apps: frozenset[str] | None = None,
         clock: Callable[[], float] | None = None,
     ) -> None:
         if max_commands_per_second <= 0:
             raise ValueError("max_commands_per_second must be positive")
         self._get_control_state = get_control_state
         self._min_interval_s = 1.0 / max_commands_per_second
+        self._allowed_apps = allowed_apps
         self._clock = clock or time.monotonic
         self._last_command_time: float | None = None
 
@@ -58,6 +66,12 @@ class SafetyPolicy:
 
         if self._get_control_state() is not ControlState.ACTIVE:
             return SafetyDecision(allowed=False, reason="control_paused")
+
+        if command.type is CommandType.LAUNCH_APP:
+            if not self._allowed_apps:
+                return SafetyDecision(allowed=False, reason="no_allowlist_configured")
+            if command.params.get("name") not in self._allowed_apps:
+                return SafetyDecision(allowed=False, reason="app_not_allowed")
 
         now = self._clock()
         if (

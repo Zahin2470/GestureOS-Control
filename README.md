@@ -14,21 +14,25 @@ Mac Webcam → OpenCV Capture → MediaPipe Hand Tracking → Normalized Feature
       Scroll • Media • Apps • Spaces
 ```
 
-> **Status: Phase 7 — Scroll.**
-> Added a fifth gesture to the vocabulary: `TWO_FINGER_SCROLL` (index +
-> middle extended, others curled). While held, frame-to-frame hand
-> movement becomes incremental scroll deltas (like a trackpad, not an
-> absolute position) via a new `ScrollController`, dispatched through
-> `RealMacOSAdapter.scroll` — now real, using Quartz
-> `CGEventCreateScrollWheelEvent`. Direction follows macOS's "natural
-> scrolling" convention by default (content follows the hand), with an
-> `natural_scrolling=False` flip available since the sign can't be
-> verified against a real Mac from here.
+> **Status: Phase 8 — App Switching + Safe Launcher.**
+> A held `FIST` that swipes far enough horizontally fires exactly one
+> `switch_app_next`/`switch_app_previous` — real Quartz Cmd+Tab /
+> Cmd+Shift+Tab key events. Only one switch per fist-hold; the swipe
+> "consumes" itself so continuing to move afterward doesn't rapid-fire
+> switches.
 >
-> Same caveats as Phases 5-6: not yet wired into the live app loop, and
-> the real Quartz scroll call can't be exercised in this Linux sandbox —
-> everything around it (gesture classification, delta math, router
-> dispatch, safety) is genuinely tested here. See
+> `launch_app` is now real too (`NSWorkspace`), but it's gated by a new
+> **fail-closed allowlist** in `SafetyPolicy`: with no allowlist
+> configured, every launch is blocked — a gesture misfire should never
+> be able to open an arbitrary application. Nothing yet binds a gesture
+> to a specific app launch (that needs a selection mechanism, likely
+> Phase 10's settings/calibration UI); this phase hardens the mechanism
+> and its safety gate, ready for that binding later.
+>
+> Same caveats as Phases 5-7: not yet wired into the live app loop, and
+> the real Quartz/AppKit calls can't be exercised in this Linux
+> sandbox — everything around them (swipe detection, allowlist logic,
+> router dispatch, safety) is genuinely tested here. See
 > [Roadmap](#roadmap) below.
 
 ---
@@ -140,14 +144,15 @@ GestureOS/
 │   ├── commands/
 │   │   ├── types.py          # CommandType enum + Command dataclass
 │   │   ├── registry.py       # Gesture/phase → CommandType binding table
-│   │   ├── safety.py         # Control-state gate + rate limiting
+│   │   ├── safety.py         # Control-state gate + launch allowlist + rate limiting
 │   │   ├── drag.py           # Click-vs-drag engagement deadzone
 │   │   ├── scroll.py         # Frame-to-frame movement → scroll deltas
+│   │   ├── switch.py         # Swipe detector → single switch_app_next/previous
 │   │   └── router.py         # Intent → Command → safety check → adapter call
 │   └── macos/
 │       ├── adapter.py        # MacOSAdapter Protocol (stable contract, no impl)
 │       ├── fake_adapter.py   # Simulation-mode adapter: records, never acts
-│       ├── real_adapter.py   # Quartz-backed adapter: cursor/click/scroll are real
+│       ├── real_adapter.py   # Quartz/AppKit-backed adapter: most commands real now
 │       ├── permissions.py    # Accessibility permission check/request
 │       └── screen.py         # Primary screen size (AppKit, with fallback)
 └── tests/
@@ -164,9 +169,10 @@ GestureOS/
     ├── test_state_machine.py
     ├── test_engine.py        # vision + gesture pipeline integration test
     ├── test_registry.py
-    ├── test_safety.py
-    ├── test_router.py        # incl. click/drag and scroll dispatch behavior
+    ├── test_safety.py        # incl. launch allowlist
+    ├── test_router.py        # incl. click/drag, scroll, app-switch dispatch
     ├── test_scroll.py
+    ├── test_switch.py
     ├── test_simulation.py    # full pipeline → fake adapter integration test
     ├── test_permissions.py
     ├── test_real_adapter.py
@@ -183,8 +189,22 @@ All processing is local. The vision pipeline (Phase 2) never logs,
 saves, or uploads a camera frame — only scalar feature values ever leave
 `camera.py`/`tracker.py` (Section 33). `FakeMacOSAdapter` (Simulation
 Mode) only records calls in memory. `RealMacOSAdapter` can move the
-cursor, click/drag, and scroll (Phases 5-7) via Quartz once
-Accessibility permission is granted — nothing else on the real OS yet.
+cursor, click/drag, scroll, switch apps, and launch apps (Phases 5-8)
+via Quartz/AppKit once Accessibility permission is granted — app
+launches are additionally gated by an explicit, fail-closed allowlist
+(see below).
+
+## Safety notes
+
+- **App launches are denied by default.** `SafetyPolicy` blocks every
+  `LAUNCH_APP` command unless constructed with an explicit
+  `allowed_apps` set — an unconfigured allowlist means "block
+  everything," not "allow everything."
+- **Releases always go through.** `MOUSE_UP` bypasses both the
+  control-state pause and the rate limiter, so pausing GestureOS or
+  hitting the rate limit can never leave a mouse button stuck down.
+- **One switch per swipe.** A held FIST only fires one app switch per
+  hold, even if the hand keeps moving past the threshold.
 
 ## Testing
 
@@ -200,14 +220,15 @@ permission prompt is required to run the suite. One test (marked
 blank frame. `test_simulation.py` runs the entire pipeline — synthetic
 hand poses → vision → gesture engine → command router → fake adapter —
 end to end. Timing-sensitive tests (state machine, safety rate limiting,
-drag/scroll engagement) all use an explicit fake/deterministic clock
-rather than real wall time — real time introduced a genuine flaky-test
-bug during Phase 6 development, which is exactly the kind of failure a
-fake clock is meant to prevent. `RealMacOSAdapter`'s actual Quartz calls
-are not exercised by this suite (there's no macOS/display to run them
-against here) — everything around them (mapping math, permission logic,
-drag/scroll math, router dispatch and error handling) is. The suite
-never touches the real mouse, keyboard, or a real macOS application.
+drag/scroll/swipe engagement) all use an explicit fake/deterministic
+clock rather than real wall time — real time introduced a genuine
+flaky-test bug during Phase 6 development, which is exactly the kind of
+failure a fake clock is meant to prevent. `RealMacOSAdapter`'s actual
+Quartz/AppKit calls are not exercised by this suite (there's no
+macOS/display to run them against here) — everything around them
+(mapping math, permission logic, drag/scroll/swipe math, allowlist
+logic, router dispatch and error handling) is. The suite never touches
+the real mouse, keyboard, or a real macOS application.
 
 ## Roadmap
 
@@ -225,9 +246,12 @@ never touches the real mouse, keyboard, or a real macOS application.
    smoothing), Quartz-backed cursor movement
 6. **Click + drag** ✅ — real Quartz mouse_down/mouse_up, dragging-aware
    cursor movement, click-vs-drag engagement deadzone
-7. **Scroll** ✅ *(this phase)* — two_finger_scroll gesture, frame-to-frame
-   movement → scroll deltas, real Quartz scroll wheel events
-8. App switching + safe launcher
+7. **Scroll** ✅ — two_finger_scroll gesture, frame-to-frame movement →
+   scroll deltas, real Quartz scroll wheel events
+8. **App switching + safe launcher** ✅ *(this phase)* — fist-swipe
+   detector, real Cmd+Tab/Cmd+Shift+Tab switching, real NSWorkspace app
+   launching gated by a fail-closed allowlist
+9. Media + Spaces
 4. Simulation — command registry, router, safety layer, fake macOS adapter
 5. macOS cursor — permissions, fingertip mapping, cursor movement
 6. Click + drag

@@ -9,6 +9,9 @@ class FakeQuartzBackend:
         self.downs: list[str] = []
         self.ups: list[str] = []
         self.scrolls: list[tuple[float, float]] = []
+        self.switch_next_calls = 0
+        self.switch_previous_calls = 0
+        self.launched: list[str] = []
 
     def move_cursor(self, x: float, y: float, dragging: bool = False) -> None:
         self.moves.append((x, y, dragging))
@@ -21,6 +24,15 @@ class FakeQuartzBackend:
 
     def scroll(self, dx: float, dy: float) -> None:
         self.scrolls.append((dx, dy))
+
+    def switch_app_next(self) -> None:
+        self.switch_next_calls += 1
+
+    def switch_app_previous(self) -> None:
+        self.switch_previous_calls += 1
+
+    def launch_app(self, name: str) -> None:
+        self.launched.append(name)
 
 
 def test_move_cursor_dispatches_to_backend() -> None:
@@ -82,13 +94,46 @@ def test_backend_is_created_lazily_once() -> None:
     assert len(created) == 1
 
 
+def test_scroll_dispatches_to_backend() -> None:
+    backend = FakeQuartzBackend()
+    adapter = RealMacOSAdapter(backend_factory=lambda: backend)
+
+    adapter.scroll(1.5, -2.5)
+
+    assert backend.scrolls == [(1.5, -2.5)]
+
+
+def test_switch_app_next_dispatches_to_backend() -> None:
+    backend = FakeQuartzBackend()
+    adapter = RealMacOSAdapter(backend_factory=lambda: backend)
+
+    adapter.switch_app_next()
+
+    assert backend.switch_next_calls == 1
+
+
+def test_switch_app_previous_dispatches_to_backend() -> None:
+    backend = FakeQuartzBackend()
+    adapter = RealMacOSAdapter(backend_factory=lambda: backend)
+
+    adapter.switch_app_previous()
+
+    assert backend.switch_previous_calls == 1
+
+
+def test_launch_app_dispatches_to_backend() -> None:
+    backend = FakeQuartzBackend()
+    adapter = RealMacOSAdapter(backend_factory=lambda: backend)
+
+    adapter.launch_app("Safari")
+
+    assert backend.launched == ["Safari"]
+
+
 @pytest.mark.parametrize(
     "call",
     [
         lambda a: a.key_press("a"),
-        lambda a: a.switch_app_next(),
-        lambda a: a.switch_app_previous(),
-        lambda a: a.launch_app("Safari"),
         lambda a: a.media_play_pause(),
         lambda a: a.space_next(),
         lambda a: a.space_previous(),
@@ -99,12 +144,3 @@ def test_unimplemented_commands_raise_not_implemented(call) -> None:
 
     with pytest.raises(NotImplementedError):
         call(adapter)
-
-
-def test_scroll_dispatches_to_backend() -> None:
-    backend = FakeQuartzBackend()
-    adapter = RealMacOSAdapter(backend_factory=lambda: backend)
-
-    adapter.scroll(1.5, -2.5)
-
-    assert backend.scrolls == [(1.5, -2.5)]

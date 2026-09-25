@@ -32,8 +32,7 @@ def test_unbound_gesture_returns_none() -> None:
     assert command_type is None
 
 
-def test_fist_and_point_are_unbound_in_phase_4() -> None:
-    assert resolve_command_type(_intent(GestureType.FIST, IntentPhase.START)) is None
+def test_point_is_unbound() -> None:
     assert resolve_command_type(_intent(GestureType.POINT, IntentPhase.START)) is None
 
 
@@ -49,4 +48,19 @@ def test_two_finger_scroll_all_phases_map_to_scroll() -> None:
     assert (
         resolve_command_type(_intent(GestureType.TWO_FINGER_SCROLL, IntentPhase.END))
         == CommandType.SCROLL
+    )
+
+
+def test_fist_all_phases_map_to_app_switch() -> None:
+    assert (
+        resolve_command_type(_intent(GestureType.FIST, IntentPhase.START))
+        == CommandType.APP_SWITCH
+    )
+    assert (
+        resolve_command_type(_intent(GestureType.FIST, IntentPhase.HOLD))
+        == CommandType.APP_SWITCH
+    )
+    assert (
+        resolve_command_type(_intent(GestureType.FIST, IntentPhase.END))
+        == CommandType.APP_SWITCH
     )

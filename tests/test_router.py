@@ -291,3 +291,116 @@ def test_paused_control_blocks_scroll() -> None:
 
     assert command is None
     assert adapter.calls_of("scroll") == []
+
+
+def test_app_switch_start_only_sets_reference_and_dispatches_nothing() -> None:
+    adapter = FakeMacOSAdapter()
+    safety = SafetyPolicy(get_control_state=lambda: ControlState.ACTIVE)
+    router = CommandRouter(adapter=adapter, safety=safety)
+
+    command = router.route_intent(
+        _intent(GestureType.FIST, IntentPhase.START, position=Point2D(0.5, 0.5))
+    )
+
+    assert command is None
+    assert adapter.calls_of("switch_app_next") == []
+    assert adapter.calls_of("switch_app_previous") == []
+
+
+def test_rightward_swipe_dispatches_switch_app_next() -> None:
+    adapter = FakeMacOSAdapter()
+    safety = SafetyPolicy(get_control_state=lambda: ControlState.ACTIVE, clock=_Ticker())
+    router = CommandRouter(adapter=adapter, safety=safety)
+
+    router.route_intent(_intent(GestureType.FIST, IntentPhase.START, position=Point2D(0.5, 0.5)))
+    router.route_intent(_intent(GestureType.FIST, IntentPhase.HOLD, position=Point2D(0.5, 0.5)))
+    command = router.route_intent(
+        _intent(GestureType.FIST, IntentPhase.HOLD, position=Point2D(0.7, 0.5))
+    )
+
+    assert command is not None
+    assert len(adapter.calls_of("switch_app_next")) == 1
+    assert adapter.calls_of("switch_app_previous") == []
+
+
+def test_leftward_swipe_dispatches_switch_app_previous() -> None:
+    adapter = FakeMacOSAdapter()
+    safety = SafetyPolicy(get_control_state=lambda: ControlState.ACTIVE, clock=_Ticker())
+    router = CommandRouter(adapter=adapter, safety=safety)
+
+    router.route_intent(_intent(GestureType.FIST, IntentPhase.START, position=Point2D(0.5, 0.5)))
+    router.route_intent(_intent(GestureType.FIST, IntentPhase.HOLD, position=Point2D(0.5, 0.5)))
+    command = router.route_intent(
+        _intent(GestureType.FIST, IntentPhase.HOLD, position=Point2D(0.3, 0.5))
+    )
+
+    assert command is not None
+    assert len(adapter.calls_of("switch_app_previous")) == 1
+    assert adapter.calls_of("switch_app_next") == []
+
+
+def test_only_one_switch_fires_per_fist_hold() -> None:
+    adapter = FakeMacOSAdapter()
+    safety = SafetyPolicy(get_control_state=lambda: ControlState.ACTIVE, clock=_Ticker())
+    router = CommandRouter(adapter=adapter, safety=safety)
+
+    router.route_intent(_intent(GestureType.FIST, IntentPhase.START, position=Point2D(0.5, 0.5)))
+    router.route_intent(_intent(GestureType.FIST, IntentPhase.HOLD, position=Point2D(0.5, 0.5)))
+    router.route_intent(_intent(GestureType.FIST, IntentPhase.HOLD, position=Point2D(0.7, 0.5)))
+    router.route_intent(_intent(GestureType.FIST, IntentPhase.HOLD, position=Point2D(0.9, 0.5)))
+
+    assert len(adapter.calls_of("switch_app_next")) == 1
+
+
+def test_new_fist_hold_can_swipe_again_after_previous_ends() -> None:
+    adapter = FakeMacOSAdapter()
+    safety = SafetyPolicy(get_control_state=lambda: ControlState.ACTIVE, clock=_Ticker())
+    router = CommandRouter(adapter=adapter, safety=safety)
+
+    router.route_intent(_intent(GestureType.FIST, IntentPhase.START, position=Point2D(0.5, 0.5)))
+    router.route_intent(_intent(GestureType.FIST, IntentPhase.HOLD, position=Point2D(0.5, 0.5)))
+    router.route_intent(_intent(GestureType.FIST, IntentPhase.HOLD, position=Point2D(0.7, 0.5)))
+    router.route_intent(_intent(GestureType.FIST, IntentPhase.END, position=Point2D(0.7, 0.5)))
+
+    router.route_intent(_intent(GestureType.FIST, IntentPhase.START, position=Point2D(0.2, 0.2)))
+    router.route_intent(_intent(GestureType.FIST, IntentPhase.HOLD, position=Point2D(0.2, 0.2)))
+    router.route_intent(_intent(GestureType.FIST, IntentPhase.HOLD, position=Point2D(0.4, 0.2)))
+
+    assert len(adapter.calls_of("switch_app_next")) == 2
+
+
+def test_paused_control_blocks_app_switch() -> None:
+    adapter = FakeMacOSAdapter()
+    safety = SafetyPolicy(get_control_state=lambda: ControlState.PAUSED, clock=_Ticker())
+    router = CommandRouter(adapter=adapter, safety=safety)
+
+    router.route_intent(_intent(GestureType.FIST, IntentPhase.START, position=Point2D(0.5, 0.5)))
+    router.route_intent(_intent(GestureType.FIST, IntentPhase.HOLD, position=Point2D(0.5, 0.5)))
+    command = router.route_intent(
+        _intent(GestureType.FIST, IntentPhase.HOLD, position=Point2D(0.7, 0.5))
+    )
+
+    assert command is None
+    assert adapter.calls_of("switch_app_next") == []
+
+
+def test_launch_app_blocked_without_allowlist() -> None:
+    from gestureos.commands.types import Command, CommandType
+
+    safety = SafetyPolicy(get_control_state=lambda: ControlState.ACTIVE)
+
+    # LAUNCH_APP isn't gesture-bound yet, so exercise the safety policy
+    # directly — confirming it fails closed with no allowlist configured
+    # (gesture binding for launch is a future phase's concern).
+    decision = safety.check(
+        Command(
+            type=CommandType.LAUNCH_APP,
+            source_gesture=GestureType.FIST,
+            source_phase=IntentPhase.START,
+            handedness="right",
+            timestamp=0.0,
+            params={"name": "Safari"},
+        )
+    )
+
+    assert decision.allowed is False

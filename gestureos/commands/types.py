@@ -23,6 +23,7 @@ class CommandType(str, Enum):
     MOUSE_MOVE = "mouse_move"
     MOUSE_UP = "mouse_up"
     SCROLL = "scroll"
+    APP_SWITCH = "app_switch"  # resolved to NEXT/PREVIOUS at dispatch time by the router
     SWITCH_APP_NEXT = "switch_app_next"
     SWITCH_APP_PREVIOUS = "switch_app_previous"
     LAUNCH_APP = "launch_app"
