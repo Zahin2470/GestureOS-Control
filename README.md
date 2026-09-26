@@ -14,24 +14,35 @@ Mac Webcam → OpenCV Capture → MediaPipe Hand Tracking → Normalized Feature
       Scroll • Media • Apps • Spaces
 ```
 
-> **Status: Phase 8 — App Switching + Safe Launcher.**
-> A held `FIST` that swipes far enough horizontally fires exactly one
-> `switch_app_next`/`switch_app_previous` — real Quartz Cmd+Tab /
-> Cmd+Shift+Tab key events. Only one switch per fist-hold; the swipe
-> "consumes" itself so continuing to move afterward doesn't rapid-fire
-> switches.
+> **Status: Phase 9 — Media + Spaces.**
+> The last gesture-binding phase. `OPEN_PALM` now toggles media
+> play/pause — bound only at `START`, so holding your palm open doesn't
+> repeatedly toggle playback. `POINT` gets a horizontal-swipe binding
+> for Spaces navigation (`SPACE_SWITCH`), reusing the exact same
+> `SwipeController` mechanism `FIST` uses for app switching — two
+> independent controller instances, so an in-progress app-switch swipe
+> and an in-progress Spaces swipe never interfere with each other.
+> `RealMacOSAdapter.media_play_pause` uses macOS's undocumented (but
+> widely relied upon) system-defined-event technique for simulating a
+> hardware media key, since there's no public Quartz constant for it;
+> `space_next`/`space_previous` simulate the default Mission Control
+> shortcut (Control+Left/Right Arrow) instead, which has no such
+> ambiguity.
 >
-> `launch_app` is now real too (`NSWorkspace`), but it's gated by a new
-> **fail-closed allowlist** in `SafetyPolicy`: with no allowlist
-> configured, every launch is blocked — a gesture misfire should never
-> be able to open an arbitrary application. Nothing yet binds a gesture
-> to a specific app launch (that needs a selection mechanism, likely
-> Phase 10's settings/calibration UI); this phase hardens the mechanism
-> and its safety gate, ready for that binding later.
+> **All five gestures are now bound to something**, closing out the
+> command-binding portion of the roadmap:
 >
-> Same caveats as Phases 5-7: not yet wired into the live app loop, and
+> | Gesture | START | HOLD | END |
+> |---|---|---|---|
+> | PINCH | mouse down (+ snap cursor) | mouse move (past deadzone) | mouse up |
+> | TWO_FINGER_SCROLL | — | scroll delta | — |
+> | FIST | — | app switch (once, on swipe) | — |
+> | OPEN_PALM | media play/pause | — | — |
+> | POINT | — | space switch (once, on swipe) | — |
+>
+> Same caveats as Phases 5-8: not yet wired into the live app loop, and
 > the real Quartz/AppKit calls can't be exercised in this Linux
-> sandbox — everything around them (swipe detection, allowlist logic,
+> sandbox — everything around them (gesture routing, swipe reuse,
 > router dispatch, safety) is genuinely tested here. See
 > [Roadmap](#roadmap) below.
 
@@ -139,20 +150,15 @@ GestureOS/
 │   ├── commands/
 │   │   ├── types.py          # CommandType enum + Command dataclass
 │   │   ├── registry.py       # Gesture/phase → CommandType binding table
-│   │   ├── safety.py         # Control-state gate + rate limiting
-│   │   └── router.py         # Intent → Command → safety check → adapter call
-│   ├── commands/
-│   │   ├── types.py          # CommandType enum + Command dataclass
-│   │   ├── registry.py       # Gesture/phase → CommandType binding table
 │   │   ├── safety.py         # Control-state gate + launch allowlist + rate limiting
 │   │   ├── drag.py           # Click-vs-drag engagement deadzone
 │   │   ├── scroll.py         # Frame-to-frame movement → scroll deltas
-│   │   ├── switch.py         # Swipe detector → single switch_app_next/previous
+│   │   ├── switch.py         # Swipe detector → single next/previous call
 │   │   └── router.py         # Intent → Command → safety check → adapter call
 │   └── macos/
 │       ├── adapter.py        # MacOSAdapter Protocol (stable contract, no impl)
 │       ├── fake_adapter.py   # Simulation-mode adapter: records, never acts
-│       ├── real_adapter.py   # Quartz/AppKit-backed adapter: most commands real now
+│       ├── real_adapter.py   # Quartz/AppKit-backed adapter: all but key_press are real
 │       ├── permissions.py    # Accessibility permission check/request
 │       └── screen.py         # Primary screen size (AppKit, with fallback)
 └── tests/
@@ -170,9 +176,9 @@ GestureOS/
     ├── test_engine.py        # vision + gesture pipeline integration test
     ├── test_registry.py
     ├── test_safety.py        # incl. launch allowlist
-    ├── test_router.py        # incl. click/drag, scroll, app-switch dispatch
+    ├── test_router.py        # incl. click/drag, scroll, app-switch, space-switch, media
     ├── test_scroll.py
-    ├── test_switch.py
+    ├── test_switch.py        # SwipeController, reused by both app- and space-switch
     ├── test_simulation.py    # full pipeline → fake adapter integration test
     ├── test_permissions.py
     ├── test_real_adapter.py
@@ -189,10 +195,10 @@ All processing is local. The vision pipeline (Phase 2) never logs,
 saves, or uploads a camera frame — only scalar feature values ever leave
 `camera.py`/`tracker.py` (Section 33). `FakeMacOSAdapter` (Simulation
 Mode) only records calls in memory. `RealMacOSAdapter` can move the
-cursor, click/drag, scroll, switch apps, and launch apps (Phases 5-8)
-via Quartz/AppKit once Accessibility permission is granted — app
-launches are additionally gated by an explicit, fail-closed allowlist
-(see below).
+cursor, click/drag, scroll, switch apps/Spaces, toggle media, and launch
+apps (Phases 5-9) via Quartz/AppKit once Accessibility permission is
+granted — app launches are additionally gated by an explicit,
+fail-closed allowlist (see below).
 
 ## Safety notes
 
@@ -203,8 +209,13 @@ launches are additionally gated by an explicit, fail-closed allowlist
 - **Releases always go through.** `MOUSE_UP` bypasses both the
   control-state pause and the rate limiter, so pausing GestureOS or
   hitting the rate limit can never leave a mouse button stuck down.
-- **One switch per swipe.** A held FIST only fires one app switch per
-  hold, even if the hand keeps moving past the threshold.
+- **One swipe-triggered action per hold.** A held FIST or POINT only
+  fires one app switch or Space switch per hold, even if the hand keeps
+  moving past the threshold — and the two swipe detectors are
+  completely independent, so switching apps and switching Spaces can
+  never interfere with each other.
+- **One toggle per palm-open.** OPEN_PALM only fires media play/pause
+  on its START phase, never repeatedly while held.
 
 ## Testing
 
@@ -223,12 +234,16 @@ end to end. Timing-sensitive tests (state machine, safety rate limiting,
 drag/scroll/swipe engagement) all use an explicit fake/deterministic
 clock rather than real wall time — real time introduced a genuine
 flaky-test bug during Phase 6 development, which is exactly the kind of
-failure a fake clock is meant to prevent. `RealMacOSAdapter`'s actual
-Quartz/AppKit calls are not exercised by this suite (there's no
-macOS/display to run them against here) — everything around them
-(mapping math, permission logic, drag/scroll/swipe math, allowlist
-logic, router dispatch and error handling) is. The suite never touches
-the real mouse, keyboard, or a real macOS application.
+failure a fake clock is meant to prevent. Phase 9 also caught (and
+fixed) three tests from earlier phases whose "unbound gesture" example
+was OPEN_PALM — no longer true once OPEN_PALM got a real binding; they
+now assert the actual new behavior instead of being loosened to keep
+passing. `RealMacOSAdapter`'s actual Quartz/AppKit calls are not
+exercised by this suite (there's no macOS/display to run them against
+here) — everything around them (mapping math, permission logic,
+drag/scroll/swipe math, allowlist logic, router dispatch and error
+handling) is. The suite never touches the real mouse, keyboard, or a
+real macOS application.
 
 ## Roadmap
 
@@ -248,16 +263,12 @@ the real mouse, keyboard, or a real macOS application.
    cursor movement, click-vs-drag engagement deadzone
 7. **Scroll** ✅ — two_finger_scroll gesture, frame-to-frame movement →
    scroll deltas, real Quartz scroll wheel events
-8. **App switching + safe launcher** ✅ *(this phase)* — fist-swipe
-   detector, real Cmd+Tab/Cmd+Shift+Tab switching, real NSWorkspace app
-   launching gated by a fail-closed allowlist
-9. Media + Spaces
-4. Simulation — command registry, router, safety layer, fake macOS adapter
-5. macOS cursor — permissions, fingertip mapping, cursor movement
-6. Click + drag
-7. Scroll
-8. App switching + safe launcher
-9. Media + Spaces
-10. Product polish — calibration wizard, settings UI, themes, audio
+8. **App switching + safe launcher** ✅ — fist-swipe detector, real
+   Cmd+Tab/Cmd+Shift+Tab switching, real NSWorkspace app launching gated
+   by a fail-closed allowlist
+9. **Media + Spaces** ✅ *(this phase)* — open_palm media toggle,
+   point-swipe Spaces navigation, all five gestures now bound
+10. Product polish — calibration wizard, settings UI, themes, audio,
+    **and live pipeline wiring into the running app loop**
 11. Reliability — permission UX, stress testing, latency profiling
 12. Documentation — full README, architecture diagram, troubleshooting

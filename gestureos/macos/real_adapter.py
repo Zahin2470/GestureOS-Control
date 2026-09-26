@@ -1,14 +1,13 @@
 """
 Real macOS adapter (Section 12 for cursor; Section 6 for click/drag;
-Phase 7 for scroll; Phase 8 for app switching + safe launching; other
-methods land in later phases).
+Phase 7 for scroll; Phase 8 for app switching + safe launching; Phase 9
+for media + Spaces; key_press still lands in a later phase).
 
 Implements MacOSAdapter against real Quartz CGEvents and AppKit.
-``move_cursor``, ``mouse_down``, ``mouse_up``, ``scroll``,
-``switch_app_next/previous``, and ``launch_app`` are functional as of
-Phase 8 — every other method raises NotImplementedError with a pointer
-to the phase that will implement it, rather than silently doing nothing
-(a silent no-op on a real adapter would be a safety problem: better to
+Everything except ``key_press`` is now functional — every remaining
+unimplemented method raises NotImplementedError with a pointer to the
+phase that will implement it, rather than silently doing nothing (a
+silent no-op on a real adapter would be a safety problem: better to
 fail loudly and let the command router log and drop it — see router.py's
 exception handling).
 
@@ -16,6 +15,14 @@ exception handling).
 allowlist check happens one layer up, in SafetyPolicy, before this
 adapter is ever called (Phase 8 — "safe launcher"). This class just
 does what it's told.
+
+``media_play_pause`` uses macOS's undocumented-but-widely-relied-on
+system-defined NSEvent technique for simulating a hardware media key,
+since there is no public CGEvent constant for it (unlike everything
+else in this file, which uses documented Quartz/AppKit APIs).
+``space_next``/``space_previous`` simulate the default Mission Control
+keyboard shortcut (Control+Left/Right Arrow) rather than that — Spaces
+switching has no equivalent "media key" ambiguity.
 
 The concrete Quartz/AppKit calls live behind a small injectable backend
 Protocol, the same pattern used by camera.py and tracker.py, so this
@@ -32,6 +39,9 @@ logger = logging.getLogger("gestureos.macos.real_adapter")
 
 _SUPPORTED_BUTTONS = ("left", "right")
 _KVK_TAB = 0x30
+_KVK_LEFT_ARROW = 0x7B
+_KVK_RIGHT_ARROW = 0x7C
+_NX_KEYTYPE_PLAY = 16
 
 
 class QuartzMouseBackend(Protocol):
@@ -42,6 +52,9 @@ class QuartzMouseBackend(Protocol):
     def switch_app_next(self) -> None: ...
     def switch_app_previous(self) -> None: ...
     def launch_app(self, name: str) -> None: ...
+    def media_play_pause(self) -> None: ...
+    def space_next(self) -> None: ...
+    def space_previous(self) -> None: ...
 
 
 def _default_quartz_backend() -> QuartzMouseBackend:
@@ -65,16 +78,41 @@ def _default_quartz_backend() -> QuartzMouseBackend:
         "right": Quartz.kCGMouseButtonRight,
     }
 
+    def post_key_combo(key_code: int, flags: int) -> None:
+        down = Quartz.CGEventCreateKeyboardEvent(None, key_code, True)
+        Quartz.CGEventSetFlags(down, flags)
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap, down)
+        up = Quartz.CGEventCreateKeyboardEvent(None, key_code, False)
+        Quartz.CGEventSetFlags(up, flags)
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap, up)
+
     def post_cmd_tab(shift: bool) -> None:
         flags = Quartz.kCGEventFlagMaskCommand
         if shift:
             flags |= Quartz.kCGEventFlagMaskShift
-        down = Quartz.CGEventCreateKeyboardEvent(None, _KVK_TAB, True)
-        Quartz.CGEventSetFlags(down, flags)
-        Quartz.CGEventPost(Quartz.kCGHIDEventTap, down)
-        up = Quartz.CGEventCreateKeyboardEvent(None, _KVK_TAB, False)
-        Quartz.CGEventSetFlags(up, flags)
-        Quartz.CGEventPost(Quartz.kCGHIDEventTap, up)
+        post_key_combo(_KVK_TAB, flags)
+
+    def post_ctrl_arrow(right: bool) -> None:
+        key_code = _KVK_RIGHT_ARROW if right else _KVK_LEFT_ARROW
+        post_key_combo(key_code, Quartz.kCGEventFlagMaskControl)
+
+    def post_media_key(key_type: int) -> None:
+        from AppKit import NSEvent, NSSystemDefined  # Lazy: only needed here.
+
+        for key_down in (True, False):
+            data1 = (key_type << 16) | ((0xA if key_down else 0xB) << 8)
+            event = NSEvent.otherEventWithType_location_modifierFlags_timestamp_windowNumber_context_subtype_data1_data2_(
+                NSSystemDefined,
+                (0, 0),
+                0xA00 if key_down else 0xB00,
+                0,
+                0,
+                0,
+                8,
+                data1,
+                -1,
+            )
+            Quartz.CGEventPost(Quartz.kCGHIDEventTap, event.CGEvent())
 
     class _RealQuartzBackend:
         def _current_location(self):
@@ -125,6 +163,16 @@ def _default_quartz_backend() -> QuartzMouseBackend:
             if not success:
                 raise RuntimeError(f"NSWorkspace could not launch {name!r}")
 
+        def media_play_pause(self) -> None:
+            post_media_key(_NX_KEYTYPE_PLAY)
+
+        def space_next(self) -> None:
+            # Default Mission Control shortcut: Control+Right Arrow.
+            post_ctrl_arrow(right=True)
+
+        def space_previous(self) -> None:
+            post_ctrl_arrow(right=False)
+
     return _RealQuartzBackend()
 
 
@@ -148,7 +196,7 @@ class RealMacOSAdapter:
         if button not in _SUPPORTED_BUTTONS:
             raise ValueError(f"unsupported button {button!r}; expected one of {_SUPPORTED_BUTTONS}")
 
-    # -- Phase 5-8: functional --------------------------------------------
+    # -- Phase 5-9: functional --------------------------------------------
 
     def move_cursor(self, x: float, y: float, dragging: bool = False) -> None:
         backend = self._ensure_backend()
@@ -187,16 +235,22 @@ class RealMacOSAdapter:
         backend.launch_app(name)
         logger.debug("launch_app", extra={"fields": {"name": name}})
 
+    def media_play_pause(self) -> None:
+        backend = self._ensure_backend()
+        backend.media_play_pause()
+        logger.debug("media_play_pause", extra={"fields": {}})
+
+    def space_next(self) -> None:
+        backend = self._ensure_backend()
+        backend.space_next()
+        logger.debug("space_next", extra={"fields": {}})
+
+    def space_previous(self) -> None:
+        backend = self._ensure_backend()
+        backend.space_previous()
+        logger.debug("space_previous", extra={"fields": {}})
+
     # -- Later phases: declared now for a stable contract, not yet real -
 
     def key_press(self, key: str) -> None:
         raise NotImplementedError("Key press support lands in a later phase")
-
-    def media_play_pause(self) -> None:
-        raise NotImplementedError("Media controls land in Phase 9")
-
-    def space_next(self) -> None:
-        raise NotImplementedError("Spaces support lands in Phase 9")
-
-    def space_previous(self) -> None:
-        raise NotImplementedError("Spaces support lands in Phase 9")

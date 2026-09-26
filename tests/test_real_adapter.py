@@ -12,6 +12,9 @@ class FakeQuartzBackend:
         self.switch_next_calls = 0
         self.switch_previous_calls = 0
         self.launched: list[str] = []
+        self.media_play_pause_calls = 0
+        self.space_next_calls = 0
+        self.space_previous_calls = 0
 
     def move_cursor(self, x: float, y: float, dragging: bool = False) -> None:
         self.moves.append((x, y, dragging))
@@ -33,6 +36,15 @@ class FakeQuartzBackend:
 
     def launch_app(self, name: str) -> None:
         self.launched.append(name)
+
+    def media_play_pause(self) -> None:
+        self.media_play_pause_calls += 1
+
+    def space_next(self) -> None:
+        self.space_next_calls += 1
+
+    def space_previous(self) -> None:
+        self.space_previous_calls += 1
 
 
 def test_move_cursor_dispatches_to_backend() -> None:
@@ -134,9 +146,6 @@ def test_launch_app_dispatches_to_backend() -> None:
     "call",
     [
         lambda a: a.key_press("a"),
-        lambda a: a.media_play_pause(),
-        lambda a: a.space_next(),
-        lambda a: a.space_previous(),
     ],
 )
 def test_unimplemented_commands_raise_not_implemented(call) -> None:
@@ -144,3 +153,30 @@ def test_unimplemented_commands_raise_not_implemented(call) -> None:
 
     with pytest.raises(NotImplementedError):
         call(adapter)
+
+
+def test_media_play_pause_dispatches_to_backend() -> None:
+    backend = FakeQuartzBackend()
+    adapter = RealMacOSAdapter(backend_factory=lambda: backend)
+
+    adapter.media_play_pause()
+
+    assert backend.media_play_pause_calls == 1
+
+
+def test_space_next_dispatches_to_backend() -> None:
+    backend = FakeQuartzBackend()
+    adapter = RealMacOSAdapter(backend_factory=lambda: backend)
+
+    adapter.space_next()
+
+    assert backend.space_next_calls == 1
+
+
+def test_space_previous_dispatches_to_backend() -> None:
+    backend = FakeQuartzBackend()
+    adapter = RealMacOSAdapter(backend_factory=lambda: backend)
+
+    adapter.space_previous()
+
+    assert backend.space_previous_calls == 1

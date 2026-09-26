@@ -26,14 +26,37 @@ def test_pinch_hold_maps_to_mouse_move() -> None:
     assert command_type == CommandType.MOUSE_MOVE
 
 
-def test_unbound_gesture_returns_none() -> None:
-    command_type = resolve_command_type(_intent(GestureType.OPEN_PALM, IntentPhase.START))
+def test_unbound_gesture_phase_returns_none() -> None:
+    # OPEN_PALM is now bound at START (media play/pause), but HOLD is
+    # deliberately left unbound so a held palm doesn't repeatedly toggle.
+    command_type = resolve_command_type(_intent(GestureType.OPEN_PALM, IntentPhase.HOLD))
 
     assert command_type is None
 
 
-def test_point_is_unbound() -> None:
-    assert resolve_command_type(_intent(GestureType.POINT, IntentPhase.START)) is None
+def test_open_palm_start_maps_to_media_play_pause() -> None:
+    command_type = resolve_command_type(_intent(GestureType.OPEN_PALM, IntentPhase.START))
+
+    assert command_type == CommandType.MEDIA_PLAY_PAUSE
+
+
+def test_open_palm_end_has_no_binding() -> None:
+    assert resolve_command_type(_intent(GestureType.OPEN_PALM, IntentPhase.END)) is None
+
+
+def test_point_all_phases_map_to_space_switch() -> None:
+    assert (
+        resolve_command_type(_intent(GestureType.POINT, IntentPhase.START))
+        == CommandType.SPACE_SWITCH
+    )
+    assert (
+        resolve_command_type(_intent(GestureType.POINT, IntentPhase.HOLD))
+        == CommandType.SPACE_SWITCH
+    )
+    assert (
+        resolve_command_type(_intent(GestureType.POINT, IntentPhase.END))
+        == CommandType.SPACE_SWITCH
+    )
 
 
 def test_two_finger_scroll_all_phases_map_to_scroll() -> None:

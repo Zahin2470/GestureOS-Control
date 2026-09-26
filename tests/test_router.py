@@ -65,7 +65,9 @@ def test_unbound_gesture_dispatches_nothing() -> None:
     safety = SafetyPolicy(get_control_state=lambda: ControlState.ACTIVE)
     router = CommandRouter(adapter=adapter, safety=safety)
 
-    command = router.route_intent(_intent(GestureType.OPEN_PALM, IntentPhase.START))
+    # OPEN_PALM+HOLD is deliberately left unbound (Phase 9): only START
+    # triggers media play/pause, so a held palm doesn't repeatedly toggle.
+    command = router.route_intent(_intent(GestureType.OPEN_PALM, IntentPhase.HOLD))
 
     assert command is None
     assert adapter.calls == []
@@ -91,7 +93,7 @@ def test_route_intents_processes_a_batch_and_drops_unbound_ones() -> None:
     router = CommandRouter(adapter=adapter, safety=safety)
 
     intents = (
-        _intent(GestureType.OPEN_PALM, IntentPhase.START),  # unbound
+        _intent(GestureType.OPEN_PALM, IntentPhase.HOLD),  # unbound
         _intent(GestureType.PINCH, IntentPhase.START),  # bound
     )
 
@@ -404,3 +406,87 @@ def test_launch_app_blocked_without_allowlist() -> None:
     )
 
     assert decision.allowed is False
+
+
+def test_open_palm_start_dispatches_media_play_pause() -> None:
+    adapter = FakeMacOSAdapter()
+    safety = SafetyPolicy(get_control_state=lambda: ControlState.ACTIVE)
+    router = CommandRouter(adapter=adapter, safety=safety)
+
+    command = router.route_intent(_intent(GestureType.OPEN_PALM, IntentPhase.START))
+
+    assert command is not None
+    assert len(adapter.calls_of("media_play_pause")) == 1
+
+
+def test_open_palm_hold_does_not_repeat_media_play_pause() -> None:
+    adapter = FakeMacOSAdapter()
+    safety = SafetyPolicy(get_control_state=lambda: ControlState.ACTIVE, clock=_Ticker())
+    router = CommandRouter(adapter=adapter, safety=safety)
+
+    router.route_intent(_intent(GestureType.OPEN_PALM, IntentPhase.START))
+    router.route_intent(_intent(GestureType.OPEN_PALM, IntentPhase.HOLD))
+    router.route_intent(_intent(GestureType.OPEN_PALM, IntentPhase.HOLD))
+
+    assert len(adapter.calls_of("media_play_pause")) == 1
+
+
+def test_rightward_point_swipe_dispatches_space_next() -> None:
+    adapter = FakeMacOSAdapter()
+    safety = SafetyPolicy(get_control_state=lambda: ControlState.ACTIVE, clock=_Ticker())
+    router = CommandRouter(adapter=adapter, safety=safety)
+
+    router.route_intent(_intent(GestureType.POINT, IntentPhase.START, position=Point2D(0.5, 0.5)))
+    router.route_intent(_intent(GestureType.POINT, IntentPhase.HOLD, position=Point2D(0.5, 0.5)))
+    command = router.route_intent(
+        _intent(GestureType.POINT, IntentPhase.HOLD, position=Point2D(0.7, 0.5))
+    )
+
+    assert command is not None
+    assert len(adapter.calls_of("space_next")) == 1
+    assert adapter.calls_of("space_previous") == []
+
+
+def test_leftward_point_swipe_dispatches_space_previous() -> None:
+    adapter = FakeMacOSAdapter()
+    safety = SafetyPolicy(get_control_state=lambda: ControlState.ACTIVE, clock=_Ticker())
+    router = CommandRouter(adapter=adapter, safety=safety)
+
+    router.route_intent(_intent(GestureType.POINT, IntentPhase.START, position=Point2D(0.5, 0.5)))
+    router.route_intent(_intent(GestureType.POINT, IntentPhase.HOLD, position=Point2D(0.5, 0.5)))
+    command = router.route_intent(
+        _intent(GestureType.POINT, IntentPhase.HOLD, position=Point2D(0.3, 0.5))
+    )
+
+    assert command is not None
+    assert len(adapter.calls_of("space_previous")) == 1
+    assert adapter.calls_of("space_next") == []
+
+
+def test_app_swipe_and_space_swipe_controllers_are_independent() -> None:
+    adapter = FakeMacOSAdapter()
+    safety = SafetyPolicy(get_control_state=lambda: ControlState.ACTIVE, clock=_Ticker())
+    router = CommandRouter(adapter=adapter, safety=safety)
+
+    # Start a FIST swipe (app switch) partway, then a POINT swipe fully
+    # — the two shouldn't share or clobber each other's reference point.
+    router.route_intent(_intent(GestureType.FIST, IntentPhase.START, position=Point2D(0.5, 0.5)))
+    router.route_intent(_intent(GestureType.FIST, IntentPhase.HOLD, position=Point2D(0.5, 0.5)))
+
+    router.route_intent(_intent(GestureType.POINT, IntentPhase.START, position=Point2D(0.2, 0.2)))
+    router.route_intent(_intent(GestureType.POINT, IntentPhase.HOLD, position=Point2D(0.2, 0.2)))
+    router.route_intent(_intent(GestureType.POINT, IntentPhase.HOLD, position=Point2D(0.4, 0.2)))
+
+    assert len(adapter.calls_of("space_next")) == 1
+    assert adapter.calls_of("switch_app_next") == []
+
+
+def test_paused_control_blocks_media_play_pause() -> None:
+    adapter = FakeMacOSAdapter()
+    safety = SafetyPolicy(get_control_state=lambda: ControlState.PAUSED)
+    router = CommandRouter(adapter=adapter, safety=safety)
+
+    command = router.route_intent(_intent(GestureType.OPEN_PALM, IntentPhase.START))
+
+    assert command is None
+    assert adapter.calls_of("media_play_pause") == []

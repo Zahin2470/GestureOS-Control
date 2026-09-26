@@ -2,9 +2,8 @@
 Command registry (Sections 20-21).
 
 Maps a confirmed gesture Intent (gesture + phase) to a CommandType.
-Deliberately a small, explicit table: later phases (media, Spaces) add
-bindings here — one dict entry each — without touching the router or
-safety layer.
+Deliberately a small, explicit table — one dict entry per binding,
+without touching the router or safety layer.
 
 Phase 4 bound PINCH start/end to MOUSE_DOWN/MOUSE_UP. Phase 6 added
 PINCH+HOLD → MOUSE_MOVE, so the router can track cursor position while
@@ -14,7 +13,12 @@ all three TWO_FINGER_SCROLL phases to SCROLL — the router (via
 scroll.py) uses source_phase to know whether to start, continue, or end
 the scroll tracking. Phase 8 binds all three FIST phases to APP_SWITCH
 the same way — the router (via switch.py) turns a big enough horizontal
-swipe into a single switch_app_next/previous call.
+swipe into a single switch_app_next/previous call. Phase 9 adds two
+more: OPEN_PALM+START alone maps to MEDIA_PLAY_PAUSE (a one-shot toggle
+— HOLD/END are deliberately left unbound so holding your palm open
+doesn't repeatedly toggle playback), and all three POINT phases map to
+SPACE_SWITCH, reusing the same swipe mechanism as APP_SWITCH for
+Spaces navigation.
 """
 
 from __future__ import annotations
@@ -33,6 +37,10 @@ _BINDINGS: dict[tuple[GestureType, IntentPhase], CommandType] = {
     (GestureType.FIST, IntentPhase.START): CommandType.APP_SWITCH,
     (GestureType.FIST, IntentPhase.HOLD): CommandType.APP_SWITCH,
     (GestureType.FIST, IntentPhase.END): CommandType.APP_SWITCH,
+    (GestureType.OPEN_PALM, IntentPhase.START): CommandType.MEDIA_PLAY_PAUSE,
+    (GestureType.POINT, IntentPhase.START): CommandType.SPACE_SWITCH,
+    (GestureType.POINT, IntentPhase.HOLD): CommandType.SPACE_SWITCH,
+    (GestureType.POINT, IntentPhase.END): CommandType.SPACE_SWITCH,
 }
 
 

@@ -68,7 +68,7 @@ def test_paused_control_prevents_click_but_still_releases() -> None:
     assert len(adapter.calls_of("mouse_up")) == 1
 
 
-def test_open_hand_only_never_produces_a_command() -> None:
+def test_sustained_open_hand_triggers_media_play_pause_once() -> None:
     clock = FakeClock()
     extractor, smoother, engine, router, adapter = _build_pipeline(clock)
 
@@ -77,5 +77,6 @@ def test_open_hand_only_never_produces_a_command() -> None:
         all_commands.extend(_step((make_open_hand(),), extractor, smoother, engine, router))
         clock.advance(0.03)
 
-    assert all_commands == []
-    assert adapter.calls == []
+    types = [c.type.value for c in all_commands]
+    assert types == ["media_play_pause"]  # fires once on START, not on every HOLD frame
+    assert len(adapter.calls_of("media_play_pause")) == 1

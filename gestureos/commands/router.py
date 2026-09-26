@@ -1,6 +1,7 @@
 """
 Command router (Sections 20-22, refined for click/drag in Phase 6,
-scroll in Phase 7, and app switching in Phase 8).
+scroll in Phase 7, app switching in Phase 8, and media/Spaces in
+Phase 9).
 
     Intent -> registry lookup -> Command -> safety policy -> adapter call
 
@@ -9,13 +10,15 @@ becomes a real (or, in Phase 4, simulated) macOS side effect, or gets
 dropped — either because no command is bound to it, because the safety
 policy blocked it, because the drag hasn't moved far enough yet to
 engage (drag.py), because the scroll gesture hasn't moved enough this
-frame to produce a nonzero delta (scroll.py), or because the swipe
-hasn't crossed its threshold yet (switch.py).
+frame to produce a nonzero delta (scroll.py), or because a swipe hasn't
+crossed its threshold yet (switch.py).
 
-MOUSE_DOWN, MOUSE_MOVE, MOUSE_UP, SCROLL, and APP_SWITCH are handled
-explicitly rather than through the generic dispatch table, because they
-share state (an in-progress drag, scroll, or swipe) that the other,
-stateless commands don't need.
+MOUSE_DOWN, MOUSE_MOVE, MOUSE_UP, SCROLL, APP_SWITCH, and SPACE_SWITCH
+are handled explicitly rather than through the generic dispatch table,
+because they share state (an in-progress drag, scroll, or swipe) that
+the other, stateless commands don't need. MEDIA_PLAY_PAUSE needs no
+special handling — the registry only binds OPEN_PALM's START phase to
+it, so it naturally fires once per palm-open rather than repeatedly.
 """
 
 from __future__ import annotations
@@ -45,14 +48,16 @@ class CommandRouter:
         cursor_mapper: CursorMapper | None = None,
         drag_controller: DragController | None = None,
         scroll_controller: ScrollController | None = None,
-        swipe_controller: SwipeController | None = None,
+        app_swipe_controller: SwipeController | None = None,
+        space_swipe_controller: SwipeController | None = None,
     ) -> None:
         self._adapter = adapter
         self._safety = safety
         self._cursor_mapper = cursor_mapper
         self._drag_controller = drag_controller or DragController()
         self._scroll_controller = scroll_controller or ScrollController()
-        self._swipe_controller = swipe_controller or SwipeController()
+        self._app_swipe_controller = app_swipe_controller or SwipeController()
+        self._space_swipe_controller = space_swipe_controller or SwipeController()
         self._dispatch: dict[CommandType, Callable[[Command], bool]] = {
             CommandType.SWITCH_APP_NEXT: self._always(lambda cmd: self._adapter.switch_app_next()),
             CommandType.SWITCH_APP_PREVIOUS: self._always(
@@ -123,29 +128,56 @@ class CommandRouter:
         self._adapter.scroll(dx, dy)
         return True
 
-    def _handle_app_switch(self, command: Command) -> bool:
+    def _handle_swipe(
+        self,
+        command: Command,
+        controller: SwipeController,
+        on_right: Callable[[], None],
+        on_left: Callable[[], None],
+    ) -> bool:
+        """Shared lifecycle for any gesture that resolves to "swipe far
+        enough one way or the other, fire once" — used by both
+        APP_SWITCH (Phase 8) and SPACE_SWITCH (Phase 9).
+        """
         position = command.params.get("position")
         if command.source_phase is IntentPhase.START:
-            self._swipe_controller.begin(position)
+            controller.begin(position)
             return False  # just establishing a reference point
         if command.source_phase is IntentPhase.END:
-            self._swipe_controller.end()
+            controller.end()
             return False
 
-        direction = self._swipe_controller.update(position)
+        direction = controller.update(position)
         if direction is None:
             return False  # threshold not crossed yet this hold
         if direction is SwipeDirection.RIGHT:
-            self._adapter.switch_app_next()
+            on_right()
         else:
-            self._adapter.switch_app_previous()
+            on_left()
         return True
+
+    def _handle_app_switch(self, command: Command) -> bool:
+        return self._handle_swipe(
+            command,
+            self._app_swipe_controller,
+            self._adapter.switch_app_next,
+            self._adapter.switch_app_previous,
+        )
+
+    def _handle_space_switch(self, command: Command) -> bool:
+        return self._handle_swipe(
+            command,
+            self._space_swipe_controller,
+            self._adapter.space_next,
+            self._adapter.space_previous,
+        )
 
     def route_intent(self, intent: Intent) -> Command | None:
         """Process one Intent. Returns the Command that was actually
         dispatched, or None if nothing happened (unbound gesture,
         blocked by the safety policy, or — for MOUSE_MOVE/SCROLL/
-        APP_SWITCH — still inside a deadzone/reference-setting frame).
+        APP_SWITCH/SPACE_SWITCH — still inside a deadzone/
+        reference-setting frame).
         """
         command_type = resolve_command_type(intent)
         if command_type is None:
@@ -182,6 +214,8 @@ class CommandRouter:
             handler = self._handle_scroll
         elif command_type is CommandType.APP_SWITCH:
             handler = self._handle_app_switch
+        elif command_type is CommandType.SPACE_SWITCH:
+            handler = self._handle_space_switch
         else:
             found = self._dispatch.get(command_type)
             if found is None:

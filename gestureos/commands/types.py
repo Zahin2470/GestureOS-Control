@@ -28,6 +28,7 @@ class CommandType(str, Enum):
     SWITCH_APP_PREVIOUS = "switch_app_previous"
     LAUNCH_APP = "launch_app"
     MEDIA_PLAY_PAUSE = "media_play_pause"
+    SPACE_SWITCH = "space_switch"  # resolved to NEXT/PREVIOUS at dispatch time by the router
     SPACE_NEXT = "space_next"
     SPACE_PREVIOUS = "space_previous"
 
