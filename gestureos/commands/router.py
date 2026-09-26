@@ -79,6 +79,13 @@ class CommandRouter:
 
         return wrapped
 
+    def set_cursor_mapper(self, cursor_mapper: CursorMapper | None) -> None:
+        """Swap the cursor mapper live (Phase 10 — settings/calibration
+        can change sensitivity, smoothing, or the active region while
+        the app is running).
+        """
+        self._cursor_mapper = cursor_mapper
+
     def _map(self, position: Point2D) -> Point2D:
         if self._cursor_mapper is None:
             return position  # no mapper configured (e.g. most tests) —

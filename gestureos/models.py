@@ -63,6 +63,9 @@ class ControlSettings:
     scroll_sensitivity: float = 1.0
     gesture_hold_time_s: float = 0.15
     cooldown_s: float = 0.35
+    active_region: tuple[float, float, float, float] = (0.15, 0.85, 0.15, 0.85)
+    # (x_min, x_max, y_min, y_max) — set by the calibration wizard
+    # (Phase 10); defaults match mapping.ActiveRegion's own defaults.
 
     def validate(self) -> None:
         self.cursor_sensitivity = _clamp(float(self.cursor_sensitivity), 0.1, 5.0)
@@ -71,6 +74,22 @@ class ControlSettings:
         self.scroll_sensitivity = _clamp(float(self.scroll_sensitivity), 0.1, 5.0)
         self.gesture_hold_time_s = _clamp(float(self.gesture_hold_time_s), 0.0, 3.0)
         self.cooldown_s = _clamp(float(self.cooldown_s), 0.0, 5.0)
+        self._validate_active_region()
+
+    def _validate_active_region(self) -> None:
+        try:
+            x_min, x_max, y_min, y_max = (float(v) for v in self.active_region)
+        except (TypeError, ValueError):
+            self.active_region = (0.15, 0.85, 0.15, 0.85)
+            return
+        x_min = _clamp(x_min, 0.0, 0.99)
+        x_max = _clamp(x_max, 0.0, 1.0)
+        y_min = _clamp(y_min, 0.0, 0.99)
+        y_max = _clamp(y_max, 0.0, 1.0)
+        if x_max - x_min < 0.1 or y_max - y_min < 0.1:
+            self.active_region = (0.15, 0.85, 0.15, 0.85)
+        else:
+            self.active_region = (x_min, x_max, y_min, y_max)
 
 
 @dataclass

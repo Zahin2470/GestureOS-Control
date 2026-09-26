@@ -9,12 +9,11 @@ GestureOS entry point.
     python main.py --profile default
 
 Section 34 defines this full CLI surface up front so the contract is
-stable across phases. In Phase 1, --debug is fully wired (controls log
-verbosity); --camera and --profile are accepted and stored but have no
-effect yet since there is no vision engine or profile system to apply
-them to — that lands in later phases. --simulate already flips the
-app's run mode, since Simulation Mode (Section 27) is load-bearing for
-how every later phase will be developed and tested.
+stable across phases. --debug, --simulate, and (as of Phase 10)
+--camera are all fully wired. --profile is still accepted and stored
+but has no effect — full named-profile support (switching entire
+binding sets) is a future enhancement beyond this project's 12-phase
+plan, not something any phase here commits to building.
 
 This file intentionally contains no macOS-specific or vision-specific
 logic (Engineering Rule #6) — it only parses arguments and starts the
@@ -52,20 +51,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=int,
         default=DEFAULT_CAMERA_INDEX,
         metavar="INDEX",
-        help=(
-            "Camera device index to use once the vision engine is "
-            "implemented (Phase 2). Accepted now, not yet functional."
-        ),
+        help="Camera device index to use.",
     )
     parser.add_argument(
         "--profile",
         type=str,
         default=DEFAULT_PROFILE_NAME,
         metavar="NAME",
-        help=(
-            "Gesture profile to load once profiles are implemented "
-            "(Phase 9). Accepted now, not yet functional."
-        ),
+        help="Gesture profile name to record in settings. Not yet functional.",
     )
     parser.add_argument(
         "--version",
@@ -92,11 +85,6 @@ def main(argv: list[str] | None = None) -> int:
         },
     )
 
-    if args.camera != DEFAULT_CAMERA_INDEX:
-        logger.debug(
-            "camera_flag_not_yet_functional",
-            extra={"fields": {"requested_camera": args.camera}},
-        )
     if args.profile != DEFAULT_PROFILE_NAME:
         logger.debug(
             "profile_flag_not_yet_functional",
@@ -107,6 +95,8 @@ def main(argv: list[str] | None = None) -> int:
     config.load()
     if args.profile != DEFAULT_PROFILE_NAME:
         config.settings.active_profile = args.profile
+    if args.camera != DEFAULT_CAMERA_INDEX:
+        config.settings.vision.camera_index = args.camera
 
     run_mode = RunMode.SIMULATION if args.simulate else RunMode.NORMAL
 
