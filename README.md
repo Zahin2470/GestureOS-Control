@@ -14,42 +14,36 @@ Mac Webcam → OpenCV Capture → MediaPipe Hand Tracking → Normalized Feature
       Scroll • Media • Apps • Spaces
 ```
 
-> **Status: Phase 10 — Product Polish.**
-> **The pipeline is now wired into the live app loop.** Running
-> `python main.py` on a Mac now actually opens the camera, tracks your
-> hand, classifies gestures, and drives the cursor/click/drag/scroll/
-> app-switching/media/Spaces commands built in Phases 2-9 — all inside
-> the pygame window's own loop, frame by frame. A missing camera, a
-> denied permission, or an unimplemented adapter method all degrade to
-> "keep running without that piece" rather than crashing, matching the
-> defensive pattern used throughout this project.
+> **Status: Phase 11 — Reliability.**
+> Three additions, all aimed at GestureOS surviving a real, long-running
+> session rather than just a demo:
 >
-> Also new this phase:
-> - **Calibration wizard** (`C` then `SPACE`, `SPACE`) — capture your own
->   comfortable cursor range instead of the hardcoded default, saved to
->   settings.
-> - **In-app settings panel** (`S`) — adjust cursor sensitivity/smoothing,
->   scroll sensitivity, and audio volume live, with arrow keys; changes
->   apply immediately and save on close.
-> - **Theme cycling** (`T`) — all four themes from Phase 1's shell are
->   finally reachable at runtime.
-> - **Audio feedback** — short synthesized tones (no asset files) on
->   click, release, and app/Space/media switches, via a new `audio/`
->   package.
-> - **Pause/resume** (`P`) — toggles `ControlState`, which `SafetyPolicy`
->   already gated every command on since Phase 4; this is the first UI
->   for it.
+> - **Permission walkthrough.** Phase 5 could only report Accessibility
+>   permission status once at startup. `PermissionFlow` now re-checks
+>   periodically through the whole session (so granting it *while
+>   GestureOS is running* is noticed within a few seconds, no restart
+>   needed), and pressing `A` opens System Settings directly to the
+>   right pane via `open_accessibility_settings()` instead of just
+>   telling you where to go.
+> - **Stress testing.** `test_stress.py` runs thousands of frames of
+>   randomized, adversarial hand-pose sequences (including a hand
+>   flickering in and out of frame on literally every frame) through
+>   the full pipeline, checking real invariants: no exceptions, no
+>   `mouse_down` left without a matching `mouse_up`, no unbounded growth
+>   in the engine's or controllers' per-hand state, no NaN ever reaching
+>   a dispatched command's position.
+> - **Latency profiling.** `PipelineProfiler` times each pipeline stage
+>   (capture, tracking, features, gesture engine, routing) as a rolling
+>   average, shown live in the HUD and logged periodically — so a real
+>   slowdown on a real Mac is visible directly, not just inferable from
+>   a dropped frame rate.
 >
-> This is, honestly, the phase I could verify the least directly —
-> there's no camera or macOS display in this sandbox, so I can't watch
-> the cursor actually move. What I *can* and did verify: the full
-> pipeline runs end to end headlessly with a real (blank) frame through
-> real MediaPipe, gracefully handles a missing camera and a missing
-> screen API, and a scripted run through the real `main.py` entry point
-> starts, processes frames, and shuts down cleanly, saving settings. The
-> parts that depend on an actual webcam and display are the same kind of
-> honest gap flagged in Phases 5-9 for Quartz calls — now extended to
-> the loop that calls them continuously.
+> Same honest caveat as Phases 5-10: the permission-flow *mechanics* are
+> fully tested here (periodic re-checking, URL opening, status-change
+> detection), but I can't watch it actually open System Settings or
+> notice a real permission grant — there's no macOS to do that on. The
+> stress and profiling work, by contrast, needed no real hardware at all
+> and is exercised exactly as it would be on a Mac.
 >
 > See [Roadmap](#roadmap) below.
 
@@ -118,6 +112,7 @@ No Terminal commands are required after the initial `pip install`.
 | `Esc` | Quit (emergency stop) |
 | `P` | Pause / resume control (`ControlState`) |
 | `T` | Cycle theme (dark → light → neon → high-contrast) |
+| `A` | Open System Settings → Accessibility (only shown when permission is missing) |
 | `C` | Start the calibration wizard |
 | `Space` | Confirm the current calibration step |
 | `S` | Open/close the settings panel |
@@ -170,7 +165,8 @@ GestureOS/
 │   ├── models.py          # Settings schema, RunMode, ControlState, Theme
 │   ├── utils/
 │   │   ├── logging.py     # Structured key=value logging
-│   │   └── timing.py      # Stopwatch / rolling average / FPS counter
+│   │   ├── timing.py      # Stopwatch / rolling average / FPS counter
+│   │   └── profiling.py   # Per-stage pipeline latency (StageTimer/PipelineProfiler)
 │   ├── vision/
 │   │   ├── camera.py         # OpenCV capture wrapper (injectable backend)
 │   │   ├── tracker.py        # MediaPipe hand tracking adapter
@@ -193,11 +189,12 @@ GestureOS/
 │   │   ├── switch.py         # Swipe detector → single next/previous call
 │   │   └── router.py         # Intent → Command → safety check → adapter call
 │   ├── macos/
-│   │   ├── adapter.py        # MacOSAdapter Protocol (stable contract)
-│   │   ├── fake_adapter.py   # Simulation-mode adapter: records, never acts
-│   │   ├── real_adapter.py   # Quartz/AppKit-backed adapter: all but key_press are real
-│   │   ├── permissions.py    # Accessibility permission check/request
-│   │   └── screen.py         # Primary screen size (AppKit, with fallback)
+│   │   ├── adapter.py         # MacOSAdapter Protocol (stable contract)
+│   │   ├── fake_adapter.py    # Simulation-mode adapter: records, never acts
+│   │   ├── real_adapter.py    # Quartz/AppKit-backed adapter: all but key_press are real
+│   │   ├── permissions.py     # Accessibility permission check/request (single call)
+│   │   ├── permission_flow.py # Periodic re-check + "open settings" walkthrough
+│   │   └── screen.py          # Primary screen size (AppKit, with fallback)
 │   ├── ui/
 │   │   ├── calibration.py    # Calibration wizard state machine (pure logic)
 │   │   └── settings_panel.py # In-app settings adjustment (pure logic)
@@ -223,10 +220,13 @@ GestureOS/
     ├── test_switch.py         # SwipeController, reused by both app- and space-switch
     ├── test_simulation.py     # full pipeline → fake adapter integration test
     ├── test_permissions.py
+    ├── test_permission_flow.py
     ├── test_real_adapter.py
     ├── test_calibration.py
     ├── test_settings_panel.py
     ├── test_audio.py
+    ├── test_profiling.py
+    ├── test_stress.py         # thousands of randomized frames; invariant checks
     ├── test_app.py            # live app shell: full pipeline, keys, calibration, settings
     └── vision_helpers.py      # synthetic hand-pose builders used by tests
 ```
@@ -258,7 +258,9 @@ gated by an explicit, fail-closed allowlist.
   control-state pause and the rate limiter, so pausing GestureOS or
   hitting the rate limit can never leave a mouse button stuck down.
 - **One swipe-triggered action per hold**, and **one toggle per
-  palm-open** — see the Gesture Reference table above.
+  palm-open** — see the Gesture Reference table above. Phase 11's stress
+  tests now actively verify this holds across thousands of randomized
+  frames, not just the specific sequences the Phase 6-9 unit tests cover.
 - **Calibration and settings changes never bypass validation.** Both the
   calibration wizard and the settings panel write into the same
   `Settings` object that `Config.save()`/`load()` validate and clamp —
@@ -266,6 +268,10 @@ gated by an explicit, fail-closed allowlist.
 - **A missing camera, denied permission, or unimplemented adapter method
   never crashes the app** — each degrades to "keep running without that
   piece," logged clearly, rather than taking down the whole loop.
+- **Permission status can change mid-session without a restart.**
+  `PermissionFlow` re-checks periodically (every 3 seconds by default),
+  so granting Accessibility while GestureOS is already running is
+  picked up on its own.
 
 ## Testing
 
@@ -285,14 +291,28 @@ and exercises the actual live app shell — injecting a fake camera and
 tracker after a real `setup()`, then calling the same `_update_pipeline()`
 the real run loop uses, to confirm gesture data really does flow from a
 "camera frame" through to adapter calls, HUD state, calibration, and
-settings, without needing real hardware. Timing-sensitive tests
-throughout use an explicit fake/deterministic clock rather than real
-wall time — real time introduced a genuine flaky-test bug during Phase 6
-development, which is exactly the kind of failure a fake clock prevents.
-`RealMacOSAdapter`'s actual Quartz/AppKit calls, and the live camera/
-cursor behavior end to end, are not exercised by this suite — there's no
-macOS/display/webcam to run them against here. The suite never touches
-the real mouse, keyboard, or a real macOS application.
+settings, without needing real hardware.
+
+`test_stress.py` (Phase 11) runs thousands of frames of randomized,
+adversarial hand-pose sequences — including a hand appearing and
+disappearing on literally every frame — through the full pipeline,
+checking that no exception is ever raised, no `mouse_down` is ever left
+without an eventual matching `mouse_up`, the gesture engine's and
+controllers' per-hand state never grows unbounded, and no `NaN` ever
+reaches a dispatched command. `test_profiling.py` and
+`test_permission_flow.py` cover the two other Phase 11 additions with
+the same fake-clock approach used everywhere timing matters in this
+project.
+
+Timing-sensitive tests throughout use an explicit fake/deterministic
+clock rather than real wall time — real time introduced a genuine
+flaky-test bug during Phase 6 development, which is exactly the kind of
+failure a fake clock prevents. `RealMacOSAdapter`'s actual Quartz/AppKit
+calls, `open_accessibility_settings()` actually opening System Settings,
+and the live camera/cursor behavior end to end are not exercised by this
+suite — there's no macOS/display/webcam to run them against here. The
+suite never touches the real mouse, keyboard, or a real macOS
+application.
 
 ## Roadmap
 
@@ -313,11 +333,12 @@ the real mouse, keyboard, or a real macOS application.
    NSWorkspace launching gated by a fail-closed allowlist
 9. **Media + Spaces** ✅ — open-palm media toggle, point-swipe Spaces
    navigation; all five gestures bound to something
-10. **Product polish** ✅ *(this phase)* — live pipeline wiring into the
-    app loop, calibration wizard, in-app settings panel, theme cycling,
-    audio feedback
-11. Reliability — permission UX (walk the user through granting
-    Accessibility, not just report its status), stress testing, latency
-    profiling
+10. **Product polish** ✅ — live pipeline wiring into the app loop,
+    calibration wizard, in-app settings panel, theme cycling, audio
+    feedback
+11. **Reliability** ✅ *(this phase)* — periodic permission re-checking
+    plus a one-key System Settings walkthrough, thousands-of-frames
+    stress testing with real invariant checks, per-stage latency
+    profiling in the HUD and logs
 12. Documentation — architecture diagram, troubleshooting guide,
     contribution notes

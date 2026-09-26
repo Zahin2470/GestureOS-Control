@@ -243,3 +243,63 @@ def test_simulation_mode_uses_fake_adapter(tmp_path) -> None:
 
     assert isinstance(app._adapter, FakeMacOSAdapter)
     app.cleanup()
+
+
+def test_normal_mode_creates_a_permission_flow(tmp_path) -> None:
+    app = _make_app(tmp_path, run_mode=RunMode.NORMAL)
+
+    assert app._permission_flow is not None
+    app.cleanup()
+
+
+def test_simulation_mode_has_no_permission_flow(tmp_path) -> None:
+    app = _make_app(tmp_path, run_mode=RunMode.SIMULATION)
+
+    assert app._permission_flow is None
+    app.cleanup()
+
+
+def test_accessibility_key_in_simulation_mode_does_not_raise(tmp_path) -> None:
+    app = _make_app(tmp_path, run_mode=RunMode.SIMULATION)
+
+    app._handle_keydown(pygame.K_a)  # no permission flow to act on — must be a safe no-op
+
+    app.cleanup()
+
+
+def test_accessibility_key_in_normal_mode_calls_open_settings(tmp_path, monkeypatch) -> None:
+    app = _make_app(tmp_path, run_mode=RunMode.NORMAL)
+    calls = []
+    monkeypatch.setattr(
+        "gestureos.app.open_accessibility_settings", lambda: calls.append(1) or True
+    )
+
+    app._handle_keydown(pygame.K_a)
+
+    assert calls == [1]
+    app.cleanup()
+
+
+def test_pipeline_update_accumulates_profiler_data(tmp_path) -> None:
+    app = _make_app(tmp_path)
+    app._camera = _FakeCamera()
+    app._camera_available = True
+    app._tracker = _FakeTracker((make_pinch_hand(),))
+
+    app._update_pipeline()
+
+    assert app._profiler.stage("capture").average_ms >= 0.0
+    assert app._profiler.stage("tracking").average_ms >= 0.0
+    assert app._profiler.total_ms >= 0.0
+    app.cleanup()
+
+
+def test_permission_flow_is_polled_every_pipeline_update(tmp_path) -> None:
+    app = _make_app(tmp_path, run_mode=RunMode.NORMAL)
+    poll_calls = []
+    app._permission_flow.poll = lambda: poll_calls.append(1)  # type: ignore[method-assign]
+
+    app._update_pipeline()
+
+    assert poll_calls == [1]
+    app.cleanup()

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import time
 from typing import TYPE_CHECKING
 
 import pygame
@@ -40,12 +41,13 @@ from gestureos.constants import (
 )
 from gestureos.interaction.engine import GestureEngine
 from gestureos.macos.fake_adapter import FakeMacOSAdapter
-from gestureos.macos.permissions import PermissionStatus, check_accessibility_permission
+from gestureos.macos.permission_flow import PermissionFlow, open_accessibility_settings
 from gestureos.macos.real_adapter import RealMacOSAdapter
 from gestureos.macos.screen import get_primary_screen_size
 from gestureos.models import ControlState, RunMode, Theme
 from gestureos.ui.calibration import CalibrationWizard
 from gestureos.ui.settings_panel import SettingsPanel
+from gestureos.utils.profiling import PipelineProfiler
 from gestureos.utils.timing import FPSCounter
 from gestureos.vision.camera import Camera
 from gestureos.vision.features import FeatureExtractor
@@ -102,8 +104,10 @@ class App:
         self._adapter: MacOSAdapter | None = None
         self._router: CommandRouter | None = None
         self._audio: AudioFeedback | None = None
-        self._permission_status: PermissionStatus | None = None
+        self._permission_flow: PermissionFlow | None = None
         self._fps_counter = FPSCounter()
+        self._profiler = PipelineProfiler()
+        self._last_profile_log_time = 0.0
 
         # UI state.
         self._settings_panel: SettingsPanel | None = None
@@ -187,11 +191,12 @@ class App:
         self._audio.start()
 
         if self.run_mode is RunMode.NORMAL:
-            self._permission_status = check_accessibility_permission()
-            if self._permission_status is not PermissionStatus.GRANTED:
+            self._permission_flow = PermissionFlow()
+            self._permission_flow.check_now()
+            if self._permission_flow.needs_attention:
                 logger.warning(
                     "accessibility_permission_missing",
-                    extra={"fields": {"status": self._permission_status.value}},
+                    extra={"fields": {"status": self._permission_flow.status.value}},
                 )
 
         self._settings_panel = SettingsPanel(settings)
@@ -263,6 +268,9 @@ class App:
     # ------------------------------------------------------------------
 
     def _update_pipeline(self) -> None:
+        if self._permission_flow is not None:
+            self._permission_flow.poll()
+
         if not self._camera_available:
             return
         assert self._camera is not None
@@ -272,16 +280,20 @@ class App:
         assert self._engine is not None
         assert self._router is not None
 
-        frame = self._camera.read()
+        with self._profiler.stage("capture"):
+            frame = self._camera.read()
         if frame is None:
             return
 
         self._update_camera_preview(frame)
 
-        raw_hands = self._tracker.process(frame)
-        frame_features = self._extractor.process(raw_hands)
-        frame_features = normalize_frame_features(frame_features)
-        frame_features = self._smoother.smooth_frame(frame_features)
+        with self._profiler.stage("tracking"):
+            raw_hands = self._tracker.process(frame)
+
+        with self._profiler.stage("features"):
+            frame_features = self._extractor.process(raw_hands)
+            frame_features = normalize_frame_features(frame_features)
+            frame_features = self._smoother.smooth_frame(frame_features)
 
         primary_hand = frame_features.hands[0] if frame_features.hands else None
         self._last_hand_present = bool(primary_hand and primary_hand.hand_present)
@@ -291,13 +303,27 @@ class App:
             self._calibration.update(position)
             return  # don't route commands to macOS while calibrating
 
-        intents = self._engine.process(frame_features)
+        with self._profiler.stage("gesture_engine"):
+            intents = self._engine.process(frame_features)
         if intents:
             self._last_gesture_label = intents[-1].gesture.value
 
-        commands = self._router.route_intents(intents)
+        with self._profiler.stage("routing"):
+            commands = self._router.route_intents(intents)
         for command in commands:
             self._play_feedback_for(command)
+
+        self._maybe_log_profile()
+
+    def _maybe_log_profile(self, interval_s: float = 5.0) -> None:
+        now = time.monotonic()
+        if now - self._last_profile_log_time < interval_s:
+            return
+        self._last_profile_log_time = now
+        logger.info(
+            "pipeline_latency",
+            extra={"fields": {**self._profiler.summary(), "total_ms": self._profiler.total_ms}},
+        )
 
     def _update_camera_preview(self, frame: object) -> None:
         try:
@@ -341,6 +367,10 @@ class App:
 
         if key == pygame.K_t:
             self._cycle_theme()
+            return
+
+        if key == pygame.K_a:
+            self._handle_open_accessibility_settings()
             return
 
         if key == pygame.K_s:
@@ -388,6 +418,13 @@ class App:
         current = self.config.settings.ui.theme
         index = _THEME_ORDER.index(current) if current in _THEME_ORDER else 0
         self.config.settings.ui.theme = _THEME_ORDER[(index + 1) % len(_THEME_ORDER)]
+
+    def _handle_open_accessibility_settings(self) -> None:
+        if self._permission_flow is None:
+            return  # Simulation Mode never needs this
+        opened = open_accessibility_settings()
+        if opened:
+            self._permission_flow.check_now()  # in case it was already granted
 
     def _apply_settings_change(self) -> None:
         if self._router is None or self._cursor_mapper is None:
@@ -437,7 +474,7 @@ class App:
         title_surf = self._fonts["title"].render(APP_NAME.upper(), True, colors["accent"])
         self._screen.blit(title_surf, (40, 40))
         subtitle_surf = self._fonts["subtitle"].render(
-            "Phase 10 — Product Polish", True, colors["fg"]
+            "Phase 11 — Reliability", True, colors["fg"]
         )
         self._screen.blit(subtitle_surf, (40, 100))
 
@@ -445,7 +482,7 @@ class App:
         assert self._screen is not None
         mode_label = "SIMULATION" if self.run_mode is RunMode.SIMULATION else "NORMAL"
         permission_label = (
-            self._permission_status.value.upper() if self._permission_status else "N/A"
+            self._permission_flow.status.value.upper() if self._permission_flow else "N/A"
         )
         camera_label = "AVAILABLE" if self._camera_available else "UNAVAILABLE"
         hand_label = "YES" if self._last_hand_present else "no"
@@ -461,9 +498,12 @@ class App:
             f"Hand detected  {hand_label}",
             f"Last gesture   {self._last_gesture_label}",
             f"FPS            {self._last_fps:.0f}",
+            f"Latency        {self._profiler.total_ms:.1f}ms",
             "",
             "ESC quit   P pause/resume   T theme   C calibrate   S settings",
         ]
+        if self._permission_flow is not None and self._permission_flow.needs_attention:
+            lines.append("A  open Accessibility settings")
         y = 150
         for line in lines:
             surf = self._fonts["status"].render(line, True, colors["fg"])
