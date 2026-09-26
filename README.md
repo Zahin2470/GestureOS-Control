@@ -14,38 +14,35 @@ Mac Webcam → OpenCV Capture → MediaPipe Hand Tracking → Normalized Feature
       Scroll • Media • Apps • Spaces
 ```
 
-> **Status: Phase 11 — Reliability.**
-> Three additions, all aimed at GestureOS surviving a real, long-running
-> session rather than just a demo:
+> **Status: complete — all 12 phases delivered.**
 >
-> - **Permission walkthrough.** Phase 5 could only report Accessibility
->   permission status once at startup. `PermissionFlow` now re-checks
->   periodically through the whole session (so granting it *while
->   GestureOS is running* is noticed within a few seconds, no restart
->   needed), and pressing `A` opens System Settings directly to the
->   right pane via `open_accessibility_settings()` instead of just
->   telling you where to go.
-> - **Stress testing.** `test_stress.py` runs thousands of frames of
->   randomized, adversarial hand-pose sequences (including a hand
->   flickering in and out of frame on literally every frame) through
->   the full pipeline, checking real invariants: no exceptions, no
->   `mouse_down` left without a matching `mouse_up`, no unbounded growth
->   in the engine's or controllers' per-hand state, no NaN ever reaching
->   a dispatched command's position.
-> - **Latency profiling.** `PipelineProfiler` times each pipeline stage
->   (capture, tracking, features, gesture engine, routing) as a rolling
->   average, shown live in the HUD and logged periodically — so a real
->   slowdown on a real Mac is visible directly, not just inferable from
->   a dropped frame rate.
+> GestureOS went from an empty repo to a fully-wired live application in
+> twelve phases: foundation → vision → gesture recognition → a simulated
+> command layer → real macOS cursor control → click/drag → scroll → app
+> switching + a fail-closed app launcher → media/Spaces → live pipeline
+> wiring with a calibration wizard, settings panel, themes, and audio →
+> reliability (permission walkthrough, stress testing, latency profiling)
+> → this documentation. See [docs/CHANGELOG.md](docs/CHANGELOG.md) for
+> exactly what each phase delivered, in order, including the two real
+> bugs found and fixed along the way.
 >
-> Same honest caveat as Phases 5-10: the permission-flow *mechanics* are
-> fully tested here (periodic re-checking, URL opening, status-change
-> detection), but I can't watch it actually open System Settings or
-> notice a real permission grant — there's no macOS to do that on. The
-> stress and profiling work, by contrast, needed no real hardware at all
-> and is exercised exactly as it would be on a Mac.
+> **What's genuinely verified vs. what isn't:** everything through the
+> command router — vision, gesture recognition, temporal voting, state
+> machines, safety policy, command routing, the live app shell's own
+> logic — runs against real code with real (if synthetic, camera-less)
+> inputs and is covered by the test suite. `RealMacOSAdapter`'s actual
+> Quartz/AppKit calls and on-screen cursor/click/scroll/switching
+> behavior have never run against a real Mac at any point in this
+> project's development, because one was never available. That gap is
+> named plainly in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and in
+> the [Known Limitations](#known-limitations) section below rather than
+> glossed over.
 >
-> See [Roadmap](#roadmap) below.
+> See [Roadmap](#roadmap) for the full phase list, or jump to
+> [Documentation](#documentation) for the architecture, troubleshooting,
+> and contribution guides.
+
+---
 
 ---
 
@@ -155,6 +152,12 @@ GestureOS/
 ├── .gitignore
 ├── .env.example
 ├── README.md
+├── LICENSE
+├── docs/
+│   ├── ARCHITECTURE.md
+│   ├── TROUBLESHOOTING.md
+│   ├── CONTRIBUTING.md
+│   └── CHANGELOG.md
 ├── requirements.txt
 ├── requirements-dev.txt
 ├── main.py
@@ -336,9 +339,96 @@ application.
 10. **Product polish** ✅ — live pipeline wiring into the app loop,
     calibration wizard, in-app settings panel, theme cycling, audio
     feedback
-11. **Reliability** ✅ *(this phase)* — periodic permission re-checking
-    plus a one-key System Settings walkthrough, thousands-of-frames
-    stress testing with real invariant checks, per-stage latency
-    profiling in the HUD and logs
-12. Documentation — architecture diagram, troubleshooting guide,
-    contribution notes
+11. **Reliability** ✅ — periodic permission re-checking plus a
+    one-key System Settings walkthrough, thousands-of-frames stress
+    testing with real invariant checks, per-stage latency profiling in
+    the HUD and logs
+12. **Documentation** ✅ *(this phase)* — architecture diagram,
+    troubleshooting guide, contribution notes, changelog, license
+
+## Documentation
+
+- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — pipeline diagram,
+  the types that flow between layers, and the reasoning behind the
+  bigger design decisions (why safety is a separate layer, why the fake
+  and real adapters share one interface, how the test suite avoids
+  needing real hardware).
+- **[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)** — organized by
+  symptom, mapping real log events (`camera_unavailable`,
+  `command_blocked`, `accessibility_permission_missing`, etc.) to
+  causes and fixes.
+- **[docs/CONTRIBUTING.md](docs/CONTRIBUTING.md)** — the conventions
+  every phase followed (lazy macOS imports, injectable backends, fake
+  clocks, structured logging, degrade-don't-crash), how to add a new
+  gesture or command binding, and a map of what each test file covers.
+- **[docs/CHANGELOG.md](docs/CHANGELOG.md)** — what every phase
+  actually delivered, in the order it was built, including the two real
+  bugs found and fixed along the way (a flaky rate-limiter test in
+  Phase 6, a wasted-frame cooldown transition in Phase 3).
+
+## Known Limitations
+
+- **Never run on a real Mac.** This entire project was developed in a
+  Linux sandbox with no camera, no display, and no macOS. Every Quartz/
+  AppKit call in `RealMacOSAdapter`, and the live camera-to-cursor
+  behavior end to end, is written correctly against documented APIs and
+  covered by tests wherever the logic around it can be isolated — but
+  the calls themselves have not been executed against a real Mac. This
+  is the single biggest thing to verify before relying on this project.
+- **No profile system.** `--profile`/`active_profile` only ever store a
+  name; no phase built switchable binding sets.
+- **No per-user gesture retraining.** The five gestures are fixed
+  geometric heuristics. Unusual hand shapes or camera angles aren't
+  something you can retrain — only the cursor's active region is
+  user-calibratable.
+- **App launching has no UI yet.** `SafetyPolicy`'s allowlist mechanism
+  and `RealMacOSAdapter.launch_app` are both real and tested, but
+  nothing in the live app currently configures an allowlist or binds a
+  gesture to a specific app — Phase 8 built the (fail-closed) mechanism,
+  not a way to use it yet.
+- **Media-key simulation relies on an undocumented macOS technique**
+  (see `real_adapter.py`'s `media_play_pause` and
+  [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)) since there is no public
+  Quartz constant for it. It's a widely-used pattern, but "undocumented"
+  means Apple could change its behavior in a future macOS release
+  without notice.
+- **No GPU acceleration toggle** for MediaPipe inference, which is
+  consistently the most expensive pipeline stage (see
+  [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md#high-latency--low-fps)).
+
+## FAQ
+
+**Does this actually work?**
+The logic does, and is genuinely tested — 270+ tests, no mocking
+library, real (if synthetic) inputs throughout. Whether the real Quartz
+calls behave exactly as written on your specific macOS version is the
+one thing only running it on a real Mac can confirm.
+
+**Why VS Code specifically, and not a packaged .app?**
+That's how the original project spec was scoped from Phase 1 — run and
+debug from the editor, not distributed as a signed, notarized
+application. Packaging it that way would be a reasonable future
+direction but isn't part of this project.
+
+**Can I use this with just a webcam and no Mac, e.g. to test the vision
+pipeline?**
+Yes — `--simulate` runs the entire pipeline including real camera
+capture and real MediaPipe tracking, it just never calls into Quartz/
+AppKit. That's exactly how most of this project's own manual testing
+was done.
+
+**Why does clicking sometimes feel like it "snaps" the cursor?**
+By design — `PINCH START` snaps the cursor exactly to the pinch point
+before clicking, for precision, rather than clicking wherever the
+cursor happened to already be.
+
+**I found a bug. Now what?**
+See [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) for the conventions
+and test-file map before diving in — the injectable-backend and
+fake-clock patterns in particular make most bugs reproducible without
+needing the same hardware that triggered them.
+
+## License
+
+[MIT](LICENSE).
+
